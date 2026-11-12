@@ -1,0 +1,123 @@
+services:
+  # Authoritative Relational Database with pgvector Extension
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: doubtdesk-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-doubtdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-doubtdesk}
+      POSTGRES_DB: ${POSTGRES_DB:-doubtdesk}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-doubtdesk} -d ${POSTGRES_DB:-doubtdesk}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # Apply the versioned schema before starting processes that depend on it.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: &backend-environment
+      APP_NAME: ${APP_NAME:-DoubtDesk}
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-true}
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-doubtdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-doubtdesk}
+      POSTGRES_DB: ${POSTGRES_DB:-doubtdesk}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in v1/.env}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # FastAPI REST API Service
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: doubtdesk-api
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/local_storage:/app/local_storage
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *backend-environment
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:3000","http://localhost:5173"]}'
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-doubtdesk_session}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-lax}
+      SESSION_MAX_AGE_SECONDS: ${SESSION_MAX_AGE_SECONDS:-604800}
+      MFA_ISSUER_NAME: ${MFA_ISSUER_NAME:-DoubtDesk Platform}
+      MFA_TOKEN_MAX_AGE_SECONDS: ${MFA_TOKEN_MAX_AGE_SECONDS:-300}
+      STORAGE_TYPE: ${STORAGE_TYPE:-local}
+      LOCAL_STORAGE_DIR: "/app/local_storage/uploads"
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-52428800}
+      WEAKNESS_ACCURACY_THRESHOLD: ${WEAKNESS_ACCURACY_THRESHOLD:-0.60}
+      MIN_DISTINCT_QUESTIONS_THRESHOLD: ${MIN_DISTINCT_QUESTIONS_THRESHOLD:-3}
+      BOSS_ARENA_DEFAULT_COOLDOWN_HOURS: ${BOSS_ARENA_DEFAULT_COOLDOWN_HOURS:-24}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-}
+      SUPERADMIN_TOTP_SECRET: ${SUPERADMIN_TOTP_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Dedicated Asynchronous Background Worker Process
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: doubtdesk-worker
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/local_storage:/app/local_storage
+    environment:
+      <<: *backend-environment
+      STORAGE_TYPE: ${STORAGE_TYPE:-local}
+      LOCAL_STORAGE_DIR: "/app/local_storage/uploads"
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
+      WORKER_JOB_LEASE_SECONDS: ${WORKER_JOB_LEASE_SECONDS:-300}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # React 19 Frontend Client
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: doubtdesk-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    environment:
+      VITE_API_URL: "http://localhost:8000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+    driver: local
+

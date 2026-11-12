@@ -1,0 +1,59 @@
+# All Markdown files are private except README
+*.md
+!README.md
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Tests
+tests/
+**/tests/
+test_*.py
+*_test.py
+*.test.*
+*.spec.*
+
+# Frontend
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Local data and generated files
+local_storage/
+data/
+logs/
+*.log
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local AI agent/skill configurations
+.agent/
+.agents/
+

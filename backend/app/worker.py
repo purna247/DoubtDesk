@@ -1,0 +1,133 @@
+import asyncio
+import logging
+import os
+import signal
+import socket
+import uuid
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.config import get_settings
+from app.database import async_session_factory, engine
+import app.model_registry  # noqa: F401 - register all ORM models before worker queries
+from app.modules.jobs.models import BackgroundJob
+from app.modules.jobs.service import JobService
+from app.modules.sources.service import SourceService
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("doubtdesk.worker")
+settings = get_settings()
+
+_running = True
+def handle_shutdown_signal(signum: int, _frame: Any) -> None:
+    global _running
+    logger.info("Received termination signal (%s); stopping after the current job.", signum)
+    _running = False
+
+
+async def process_next_job(
+    session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
+    worker_id: str | None = None,
+) -> bool:
+    """Recover expired leases, claim one job, and run its registered handler."""
+    worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+    async with session_factory() as db:
+        await JobService.recover_expired_leases(db)
+        job = await JobService.claim_next_job(
+            db,
+            worker_id=worker_id,
+            lease_duration_seconds=settings.WORKER_JOB_LEASE_SECONDS,
+        )
+        if job is None:
+            return False
+
+        job_id = job.id
+        job_type = job.job_type
+        logger.info("Claimed background job %s (%s).", job_id, job_type)
+
+        try:
+            if job_type == "extract_source_document":
+                result = await SourceService.process_extraction_job(db, job_id)
+                logger.info(
+                    "Completed extraction job %s: outcome=%s chunks=%s assets=%s warnings=%s.",
+                    job_id,
+                    result.status,
+                    len(result.chunks),
+                    len(result.assets),
+                    len(result.warnings),
+                )
+            else:
+                await JobService.fail_job(
+                    db,
+                    job_id,
+                    error_code="UNSUPPORTED_JOB_TYPE",
+                    safe_error_summary="No worker handler is registered for this job type.",
+                    retry=False,
+                )
+                logger.error("Job %s has unsupported type %s.", job_id, job_type)
+        except Exception as exc:
+            # Do not log driver/parser exception text; it can contain secrets or uploaded data.
+            await db.rollback()
+            current_job = await db.get(BackgroundJob, job_id)
+            if current_job and current_job.status == "running" and current_job.lease_owner == worker_id:
+                await JobService.fail_job(
+                    db,
+                    job_id,
+                    error_code="JOB_PROCESSING_ERROR",
+                    safe_error_summary="An unexpected processing error occurred. The job will be retried when possible.",
+                    retry=True,
+                )
+            logger.error(
+                "Background job %s failed with %s.",
+                job_id,
+                type(exc).__name__,
+            )
+
+        return True
+
+
+async def run_worker() -> None:
+    """Continuously poll and execute durable jobs until a shutdown signal arrives."""
+    global _running
+    worker_id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    logger.info(
+        "Worker started in %s mode (poll=%ss, lease=%ss).",
+        settings.APP_ENV,
+        settings.WORKER_POLL_INTERVAL_SECONDS,
+        settings.WORKER_JOB_LEASE_SECONDS,
+    )
+
+    try:
+        while _running:
+            try:
+                processed = await process_next_job(worker_id=worker_id)
+                if not processed and _running:
+                    await asyncio.sleep(settings.WORKER_POLL_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("Worker poll failed with %s; retrying.", type(exc).__name__)
+                if _running:
+                    await asyncio.sleep(max(settings.WORKER_POLL_INTERVAL_SECONDS, 1.0))
+    finally:
+        logger.info("Cleaning up worker database connections.")
+        await engine.dispose()
+        logger.info("Background worker stopped.")
+
+
+def main() -> None:
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    try:
+        asyncio.run(run_worker())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
