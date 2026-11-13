@@ -125,10 +125,13 @@ class PracticeQuestionOut(BaseModel):
     activity_version_id: UUID
     title: str
     question: str
-    options: List[Dict[str, str]]
+    activity_type: str = "mcq"
+    options: List[Dict[str, str]] = Field(default_factory=list)
+    payload: Dict[str, Any] = Field(default_factory=dict)
     difficulty: str
     is_remediation: bool = False
     has_hint: bool = True
+    citation: Optional[str] = None
 
 
 class PracticeSessionStateOut(BaseModel):
@@ -165,7 +168,12 @@ class PracticeHintOut(BaseModel):
 
 class PracticeAnswerRequest(BaseModel):
     activity_version_id: UUID
-    selected_option_id: str = Field(..., min_length=1, max_length=80)
+    selected_option_id: Optional[str] = Field(default=None, max_length=120)
+    text_answer: Optional[str] = Field(default=None, max_length=500)
+    answers: Optional[Dict[str, str]] = None
+    pairs: Optional[List[Dict[str, str]]] = None
+    order: Optional[List[str]] = None
+    classifications: Optional[Dict[str, str]] = None
 
 
 class PracticeAnswerResultOut(BaseModel):
@@ -173,6 +181,7 @@ class PracticeAnswerResultOut(BaseModel):
     correct_option_id: Optional[str] = None
     explanation: str
     feedback_summary: str
+    citation: Optional[str] = None
     node_completed: bool
     session: PracticeSessionStateOut
     next_question: Optional[PracticeQuestionOut] = None

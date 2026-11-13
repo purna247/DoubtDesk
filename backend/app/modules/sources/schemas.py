@@ -116,3 +116,16 @@ class JobStatusResponse(BaseModel):
     events: Optional[List[JobEventOut]] = None
 
     model_config = {"from_attributes": True}
+
+
+class RagSearchResultOut(BaseModel):
+    chunk_id: str
+    document_id: str
+    document_title: str
+    source_type: str
+    page_number: Optional[int] = None
+    slide_number: Optional[int] = None
+    section_path: Optional[str] = None
+    content_text: str
+    citation: str
+    score: float

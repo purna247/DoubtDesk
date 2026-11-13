@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import pymupdf
 import docx
 import pptx
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
 @dataclass
@@ -419,6 +420,47 @@ class DocumentExtractionEngine:
                         )
                         chunk_idx += 1
                         total_text += "\n" + t_str
+
+                elif getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE and hasattr(shape, "image"):
+                    try:
+                        img = shape.image
+                        img_bytes = img.blob
+                        img_hash = hashlib.sha256(img_bytes).hexdigest()
+                        assets.append(
+                            ExtractedAsset(
+                                asset_type="image",
+                                bytes_data=img_bytes,
+                                sha256_checksum=img_hash,
+                                slide_number=slide_num,
+                                surrounding_text=slide_title or None,
+                                metadata_json={"format": img.ext, "filename": getattr(img, "filename", None)},
+                            )
+                        )
+                    except Exception:
+                        pass
+
+            # Extract slide presenter/speaker notes if present
+            if getattr(slide, "has_notes_slide", False) and slide.notes_slide:
+                try:
+                    notes_tf = slide.notes_slide.notes_text_frame
+                    if notes_tf and notes_tf.text.strip():
+                        notes_text = notes_tf.text.strip()
+                        h = hashlib.sha256(notes_text.encode("utf-8")).hexdigest()
+                        chunks.append(
+                            ExtractedChunk(
+                                chunk_index=chunk_idx,
+                                slide_number=slide_num,
+                                section_path=f"{slide_title} (Notes)" if slide_title else "Slide Notes",
+                                chunk_type="paragraph",
+                                content_text=notes_text,
+                                content_hash=h,
+                                metadata_json={"is_slide_notes": True},
+                            )
+                        )
+                        chunk_idx += 1
+                        total_text += "\n" + notes_text
+                except Exception:
+                    pass
 
         total_text = total_text.strip()
         raw_checksum = hashlib.sha256(total_text.encode("utf-8")).hexdigest() if total_text else ""

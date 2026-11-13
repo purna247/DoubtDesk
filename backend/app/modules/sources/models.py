@@ -197,12 +197,14 @@ class SourceChunk(Base):
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    embedding_json: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     extraction: Mapped["SourceExtraction"] = relationship("SourceExtraction", back_populates="chunks")
+    document: Mapped["SourceDocument"] = relationship("SourceDocument")
 
 
 class SourceAsset(Base):

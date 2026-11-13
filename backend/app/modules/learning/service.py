@@ -164,6 +164,38 @@ class LearningService:
                 ],
                 "explanation": authoring_payload.get("explanation"),
             }
+
+        elif activity_type == "true_false":
+            opts = authoring_payload.get("options") or [
+                {"option_id": "true", "text": "True"},
+                {"option_id": "false", "text": "False"},
+            ]
+            student_payload = {
+                "question": authoring_payload.get("question") or authoring_payload.get("prompt"),
+                "options": [{"option_id": str(o.get("option_id")), "text": str(o.get("text"))} for o in opts],
+            }
+            raw_correct = authoring_payload.get("correct_option_id")
+            if raw_correct is None and "correct_value" in authoring_payload:
+                raw_correct = "true" if authoring_payload["correct_value"] is True else "false"
+            answer_key = {
+                "correct_option_id": str(raw_correct or "true").lower(),
+                "explanation": authoring_payload.get("explanation"),
+            }
+
+        elif activity_type == "one_word":
+            acc = authoring_payload.get("accepted_answers") or []
+            if isinstance(acc, str):
+                acc = [s.strip() for s in acc.split(",") if s.strip()]
+            if not acc and authoring_payload.get("correct_answer"):
+                acc = [str(authoring_payload["correct_answer"]).strip()]
+            student_payload = {
+                "question": authoring_payload.get("question") or authoring_payload.get("prompt"),
+                "placeholder": authoring_payload.get("placeholder", "Type one-word answer..."),
+            }
+            answer_key = {
+                "accepted_answers": acc,
+                "explanation": authoring_payload.get("explanation"),
+            }
         else:
             raise AppException(
                 status_code=400,
@@ -373,6 +405,82 @@ class LearningService:
             approved_at=now,
         )
         db.add(version)
+        await db.commit()
+        await db.refresh(activity)
+        return activity
+
+    @staticmethod
+    async def update_activity(
+        db: AsyncSession,
+        activity_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        data: ActivityCreate,
+    ) -> Activity:
+        activity = await db.get(Activity, activity_id)
+        if not activity or activity.institution_id != tenant_id:
+            raise AppException(status_code=404, code="ACTIVITY_NOT_FOUND", message="Activity not found.")
+
+        student_payload, answer_key = LearningService.sanitize_authoring_payload(
+            activity_type=data.activity_type,
+            authoring_payload=data.authoring_payload,
+        )
+        scoring_config = data.scoring_config or {"max_marks": 1.0, "partial_credit": True}
+
+        v_stmt = (
+            select(ActivityVersion)
+            .where(ActivityVersion.activity_id == activity.id)
+            .order_by(ActivityVersion.version_number.desc())
+            .limit(1)
+        )
+        latest_v = (await db.execute(v_stmt)).scalars().first()
+
+        now = datetime.now(timezone.utc)
+        if latest_v:
+            latest_v.title = data.title
+            latest_v.instructions = data.instructions
+            latest_v.student_payload_json = student_payload
+            if scoring_config.get("citation"):
+                answer_key["citation"] = scoring_config["citation"]
+            scoring_config["edited_by_teacher"] = True
+            latest_v.answer_key_json = answer_key
+            latest_v.scoring_config_json = scoring_config
+            latest_v.approved_by_user_id = user_id
+            latest_v.approved_at = now
+        else:
+            latest_v = ActivityVersion(
+                institution_id=tenant_id,
+                activity_id=activity.id,
+                version_number=1,
+                activity_type=data.activity_type,
+                schema_version=1,
+                title=data.title,
+                instructions=data.instructions,
+                student_payload_json=student_payload,
+                answer_key_json=answer_key,
+                scoring_config_json=scoring_config,
+                approval_status="approved",
+                created_by_user_id=user_id,
+                approved_by_user_id=user_id,
+                approved_at=now,
+            )
+            db.add(latest_v)
+
+        activity.status = "active"
+        await db.commit()
+        await db.refresh(activity)
+        return activity
+
+    @staticmethod
+    async def archive_activity(
+        db: AsyncSession,
+        activity_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+    ) -> Activity:
+        activity = await db.get(Activity, activity_id)
+        if not activity or activity.institution_id != tenant_id:
+            raise AppException(status_code=404, code="ACTIVITY_NOT_FOUND", message="Activity not found.")
+        activity.status = "archived"
         await db.commit()
         await db.refresh(activity)
         return activity

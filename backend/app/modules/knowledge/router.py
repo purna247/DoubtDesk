@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,6 +123,22 @@ async def publish_academic_content(offering_id: uuid.UUID,user: UserProfile=Depe
     """Publish all accepted course structures/nodes atomically; flagged items remain hidden."""
     tenant_id=_get_tenant_id(user);user_id=uuid.UUID(user.id)
     await KnowledgeService.verify_teacher_access(db,offering_id,tenant_id,user_id,user.role in ["ADMIN","SUPER_ADMIN"])
+    
+    # Self-healing: Mark any stale extraction runs (>15m old or older than latest succeeded run) as failed
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    stale_runs = (await db.execute(
+        select(AcademicExtractionRun).where(
+            AcademicExtractionRun.course_offering_id == offering_id,
+            AcademicExtractionRun.status == "running",
+            AcademicExtractionRun.created_at < cutoff
+        )
+    )).scalars().all()
+    for sr in stale_runs:
+        sr.status = "failed"
+        sr.safe_error_summary = "Timed out or superseded by newer extraction"
+    if stale_runs:
+        await db.commit()
+
     active_job=await db.scalar(select(BackgroundJob.id).where(BackgroundJob.scope_course_offering_id==offering_id,BackgroundJob.job_type=="extract_source_document",BackgroundJob.status.in_(["queued","running","retrying"])).limit(1))
     active_run=await db.scalar(select(AcademicExtractionRun.id).where(AcademicExtractionRun.course_offering_id==offering_id,AcademicExtractionRun.status=="running").limit(1))
     if active_job or active_run:raise AppException(status_code=409,code="ROADMAP_GENERATION_IN_PROGRESS",message="Wait until roadmap generation finishes before publishing the course content.")
@@ -130,7 +146,19 @@ async def publish_academic_content(offering_id: uuid.UUID,user: UserProfile=Depe
     if latest_run and await db.scalar(select(AcademicExtractionBatch.id).where(AcademicExtractionBatch.run_id==latest_run.id,AcademicExtractionBatch.stage=="grouping",AcademicExtractionBatch.status=="flagged_for_review").limit(1)):
         raise AppException(status_code=409,code="ROADMAP_GENERATION_INCOMPLETE",message="Resolve or retry the flagged roadmap generation before publishing the course content.")
     version=(await db.execute(select(CourseContentVersion).where(CourseContentVersion.course_offering_id==offering_id,CourseContentVersion.institution_id==tenant_id,CourseContentVersion.status.in_(["draft","in_review"])).order_by(CourseContentVersion.version_number.desc()).limit(1))).scalars().first()
-    if not version:raise AppException(status_code=409,code="NO_DRAFT_CONTENT",message="There is no draft course content to publish.")
+    if not version:
+        # If no draft version, check if already published
+        published_version=(await db.execute(select(CourseContentVersion).where(CourseContentVersion.course_offering_id==offering_id,CourseContentVersion.institution_id==tenant_id,CourseContentVersion.status=="published").order_by(CourseContentVersion.version_number.desc()).limit(1))).scalars().first()
+        if published_version:
+            # Also publish any lingering draft learning nodes
+            nodes=(await db.execute(select(LearningNode).where(LearningNode.course_offering_id==offering_id,LearningNode.status=="draft").with_for_update())).scalars().all()
+            now=datetime.now(timezone.utc)
+            for node in nodes:
+                node.status="published"
+                node.published_at=now
+            await db.commit()
+            return {"course_content_version_id":str(published_version.id),"published_nodes":len(nodes),"status":"published"}
+        raise AppException(status_code=409,code="NO_DRAFT_CONTENT",message="There is no draft course content to publish.")
     accepted=(await db.execute(select(func.count()).select_from(SyllabusNode).where(SyllabusNode.course_content_version_id==version.id,SyllabusNode.review_status=="approved"))).scalar() or 0
     if not accepted:raise AppException(status_code=409,code="NO_APPROVED_CONTENT",message="No validated syllabus content is ready to publish.")
     now=datetime.now(timezone.utc)

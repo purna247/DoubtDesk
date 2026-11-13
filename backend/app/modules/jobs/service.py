@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Tuple
-from sqlalchemy import select, and_, or_, update
+from sqlalchemy import select, and_, or_, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -79,7 +79,10 @@ class JobService:
                     or_(BackgroundJob.next_retry_at.is_(None), BackgroundJob.next_retry_at <= now),
                 ),
             )
-        ).order_by(BackgroundJob.created_at.asc()).limit(1)
+        ).order_by(
+            case((BackgroundJob.status == "queued", 0), else_=1),
+            BackgroundJob.created_at.asc(),
+        ).limit(1)
 
         # Check dialect for SKIP LOCKED support
         is_sqlite = db.bind and db.bind.dialect.name == "sqlite"

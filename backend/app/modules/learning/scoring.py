@@ -271,9 +271,72 @@ def score_key_points_check(
     )
 
 
+def score_true_false(
+    response: Dict[str, Any],
+    answer_key: Dict[str, Any],
+    config: Dict[str, Any],
+) -> ActivityEvaluationResult:
+    max_marks = float(config.get("max_marks", 1.0))
+    selected = str(response.get("selected_option_id") or response.get("answer") or "").strip().lower()
+    correct = str(answer_key.get("correct_option_id") or answer_key.get("correct_answer") or "").strip().lower()
+    is_correct = bool(selected and selected == correct)
+    marks = max_marks if is_correct else 0.0
+    return ActivityEvaluationResult(
+        is_correct=is_correct,
+        marks_awarded=marks,
+        max_marks=max_marks,
+        percentage=100.0 if is_correct else 0.0,
+        misconception_hit=None,
+        details={
+            "selected_option_id": selected,
+            "correct_option_id": correct,
+            "explanation": answer_key.get("explanation"),
+        },
+    )
+
+
+def score_one_word(
+    response: Dict[str, Any],
+    answer_key: Dict[str, Any],
+    config: Dict[str, Any],
+) -> ActivityEvaluationResult:
+    max_marks = float(config.get("max_marks", 1.0))
+    raw_answer = str(
+        response.get("text_answer")
+        or response.get("answer")
+        or response.get("selected_option_id")
+        or ""
+    ).strip().casefold()
+    accepted = [
+        str(a).strip().casefold()
+        for a in (
+            answer_key.get("accepted_answers")
+            or ([answer_key.get("correct_answer")] if answer_key.get("correct_answer") else [])
+            or []
+        )
+        if a is not None and str(a).strip()
+    ]
+    is_correct = bool(raw_answer and raw_answer in accepted)
+    marks = max_marks if is_correct else 0.0
+    return ActivityEvaluationResult(
+        is_correct=is_correct,
+        marks_awarded=marks,
+        max_marks=max_marks,
+        percentage=100.0 if is_correct else 0.0,
+        misconception_hit=None,
+        details={
+            "submitted_answer": raw_answer,
+            "accepted_answers": accepted,
+            "explanation": answer_key.get("explanation"),
+        },
+    )
+
+
 SCORING_DISPATCHER = {
     "mcq": score_mcq,
+    "true_false": score_true_false,
     "fill_blank": score_fill_blank,
+    "one_word": score_one_word,
     "matching_pairs": score_matching_pairs,
     "ordering": score_ordering,
     "classification": score_classification,

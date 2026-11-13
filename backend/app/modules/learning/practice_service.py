@@ -36,9 +36,10 @@ from app.modules.learning.schemas import (
     PracticeSessionStartOut,
     PracticeSessionStateOut,
 )
-from app.modules.learning.scoring import evaluate_activity_response
+from app.modules.learning.scoring import SCORING_DISPATCHER, evaluate_activity_response
 from app.modules.learning.service import LearningService
 from app.modules.questions.models import QuestionVersion
+from app.modules.sources.embeddings import find_top_k_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -81,20 +82,25 @@ def _build_session_state_out(session: StudentPracticeSession) -> PracticeSession
 def _to_practice_question_out(act_v: ActivityVersion) -> PracticeQuestionOut:
     payload = act_v.student_payload_json or {}
     cfg = act_v.scoring_config_json or {}
+    ans_key = act_v.answer_key_json or {}
     raw_opts = payload.get("options") if isinstance(payload.get("options"), list) else []
     options = [
         {"option_id": str(o.get("option_id", "")), "text": str(o.get("text", ""))}
         for o in raw_opts
         if isinstance(o, dict)
     ]
+    q_text = str(payload.get("question") or payload.get("template") or payload.get("prompt") or act_v.title)
     return PracticeQuestionOut(
         activity_version_id=act_v.id,
         title=act_v.title,
-        question=str(payload.get("question") or act_v.title),
+        question=q_text,
+        activity_type=act_v.activity_type,
         options=options,
+        payload=payload,
         difficulty=str(cfg.get("difficulty") or "easy"),
         is_remediation=bool(cfg.get("is_remediation", False)),
-        has_hint=bool(cfg.get("hint")) or True,
+        has_hint=bool(cfg.get("hint")),
+        citation=ans_key.get("citation") or cfg.get("citation"),
     )
 
 
@@ -146,6 +152,144 @@ async def _ensure_node_unlocked(
         )
 
 
+def _persist_practice_activity(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    node_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    title: str,
+    activity_type: str,
+    raw_payload: Dict[str, Any],
+    difficulty: str,
+    hint: str,
+    explanation: str,
+    is_remediation: bool = False,
+    easier_followup: Optional[Dict[str, Any]] = None,
+    citation: Optional[str] = None,
+) -> tuple[Activity, ActivityVersion]:
+    now = datetime.now(timezone.utc)
+    if activity_type not in SCORING_DISPATCHER:
+        activity_type = "mcq"
+
+    authoring_payload = dict(raw_payload)
+    authoring_payload["explanation"] = explanation.strip()
+
+    if activity_type == "mcq":
+        raw_options = authoring_payload.get("options") or []
+        if raw_options and isinstance(raw_options[0], str):
+            opt_items = [{"option_id": f"opt_{i+1}", "text": s.strip()} for i, s in enumerate(raw_options) if s.strip()]
+        elif raw_options and isinstance(raw_options[0], dict):
+            opt_items = [
+                {"option_id": str(o.get("option_id", f"opt_{i+1}")), "text": str(o.get("text", "")).strip()}
+                for i, o in enumerate(raw_options)
+                if str(o.get("text", "")).strip()
+            ]
+        else:
+            opt_items = []
+        if len(opt_items) < 2:
+            opt_items = [{"option_id": "opt_1", "text": "True"}, {"option_id": "opt_2", "text": "False"}]
+        c_idx = authoring_payload.get("correct_index", 0)
+        c_opt = authoring_payload.get("correct_option_id")
+        if not c_opt:
+            safe_idx = c_idx if 0 <= c_idx < len(opt_items) else 0
+            c_opt = opt_items[safe_idx]["option_id"]
+        authoring_payload["question"] = str(authoring_payload.get("question") or title).strip()
+        authoring_payload["options"] = opt_items
+        authoring_payload["correct_option_id"] = c_opt
+
+    elif activity_type == "true_false":
+        c_val = authoring_payload.get("correct_value")
+        if c_val is not None:
+            c_opt = "true" if c_val is True else "false"
+        else:
+            c_opt = str(authoring_payload.get("correct_option_id") or "true").lower()
+        authoring_payload["question"] = str(authoring_payload.get("question") or title).strip()
+        authoring_payload["options"] = [{"option_id": "true", "text": "True"}, {"option_id": "false", "text": "False"}]
+        authoring_payload["correct_option_id"] = c_opt
+
+    elif activity_type == "fill_blank":
+        tmpl = authoring_payload.get("template") or authoring_payload.get("question") or f"{title} involves [blank_1]."
+        if "[blank_1]" not in tmpl and "_" in tmpl:
+            tmpl = tmpl.replace("___", "[blank_1]").replace("__", "[blank_1]")
+        if "[blank_1]" not in tmpl:
+            tmpl = f"{tmpl} [blank_1]"
+        authoring_payload["template"] = tmpl
+        if "blanks" not in authoring_payload:
+            acc = authoring_payload.get("accepted_answers") or [authoring_payload.get("correct_answer") or "answer"]
+            if isinstance(acc, str):
+                acc = [s.strip() for s in acc.split(",") if s.strip()]
+            authoring_payload["blanks"] = [{"blank_id": "blank_1", "accepted_answers": acc, "explanation": explanation}]
+
+    elif activity_type == "one_word":
+        acc = authoring_payload.get("accepted_answers") or []
+        if isinstance(acc, str):
+            acc = [s.strip() for s in acc.split(",") if s.strip()]
+        if not acc and authoring_payload.get("correct_answer"):
+            acc = [str(authoring_payload["correct_answer"]).strip()]
+        if not acc:
+            acc = [title.strip()]
+        authoring_payload["question"] = str(authoring_payload.get("question") or title).strip()
+        authoring_payload["accepted_answers"] = acc
+
+    elif activity_type == "matching_pairs":
+        raw_pairs = authoring_payload.get("pairs") or [
+            {"pair_id": "p1", "left_text": f"{title} Concept", "right_text": "Definition"},
+            {"pair_id": "p2", "left_text": "Methodology", "right_text": "Implementation"},
+        ]
+        authoring_payload["pairs"] = raw_pairs
+
+    elif activity_type == "ordering":
+        items = authoring_payload.get("items") or [
+            {"item_id": "i1", "label": "Step 1"},
+            {"item_id": "i2", "label": "Step 2"},
+        ]
+        authoring_payload["items"] = items
+        if "correct_order" not in authoring_payload:
+            authoring_payload["correct_order"] = [i["item_id"] for i in items]
+
+    student_payload, answer_key = LearningService.sanitize_authoring_payload(
+        activity_type,
+        authoring_payload,
+    )
+    if easier_followup:
+        answer_key["easier_followup"] = easier_followup
+    if citation:
+        answer_key["citation"] = citation
+
+    activity = Activity(
+        institution_id=tenant_id,
+        learning_node_id=node_id,
+        created_by_user_id=user_id,
+        status="active",
+    )
+    db.add(activity)
+    version = ActivityVersion(
+        institution_id=tenant_id,
+        activity=activity,
+        version_number=1,
+        activity_type=activity_type,
+        schema_version=1,
+        title=title[:240],
+        student_payload_json=student_payload,
+        answer_key_json=answer_key,
+        scoring_config_json={
+            "max_marks": 1.0,
+            "difficulty": difficulty if difficulty in _DIFFICULTY_ORDER else "easy",
+            "hint": hint.strip(),
+            "is_remediation": is_remediation,
+            "citation": citation,
+            "source": "adaptive_practice",
+        },
+        approval_status="approved",
+        created_by_user_id=user_id,
+        approved_by_user_id=user_id,
+        approved_at=now,
+    )
+    db.add(version)
+    return activity, version
+
+
 def _persist_mcq_activity(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -161,61 +305,27 @@ def _persist_mcq_activity(
     difficulty: str,
     is_remediation: bool = False,
     easier_followup: Optional[Dict[str, Any]] = None,
+    citation: Optional[str] = None,
 ) -> tuple[Activity, ActivityVersion]:
-    now = datetime.now(timezone.utc)
-    opt_items = [
-        {"option_id": f"opt_{idx + 1}", "text": opt.strip()}
-        for idx, opt in enumerate(options)
-        if opt.strip()
-    ]
-    if len(opt_items) < 2:
-        opt_items = [
-            {"option_id": "opt_1", "text": "True"},
-            {"option_id": "opt_2", "text": "False"},
-        ]
-    safe_idx = correct_index if 0 <= correct_index < len(opt_items) else 0
-    student_payload, answer_key = LearningService.sanitize_authoring_payload(
-        "mcq",
-        {
-            "question": question_text.strip(),
-            "options": opt_items,
-            "correct_option_id": opt_items[safe_idx]["option_id"],
-            "explanation": explanation.strip(),
-        },
-    )
-    if easier_followup:
-        answer_key["easier_followup"] = easier_followup
-
-    activity = Activity(
-        institution_id=tenant_id,
-        learning_node_id=node_id,
-        created_by_user_id=user_id,
-        status="active",
-    )
-    db.add(activity)
-    version = ActivityVersion(
-        institution_id=tenant_id,
-        activity=activity,
-        version_number=1,
+    return _persist_practice_activity(
+        db=db,
+        tenant_id=tenant_id,
+        node_id=node_id,
+        user_id=user_id,
+        title=title,
         activity_type="mcq",
-        schema_version=1,
-        title=title[:240],
-        student_payload_json=student_payload,
-        answer_key_json=answer_key,
-        scoring_config_json={
-            "max_marks": 1.0,
-            "difficulty": difficulty if difficulty in _DIFFICULTY_ORDER else "easy",
-            "hint": hint.strip(),
-            "is_remediation": is_remediation,
-            "source": "adaptive_practice",
+        raw_payload={
+            "question": question_text,
+            "options": options,
+            "correct_index": correct_index,
         },
-        approval_status="approved",
-        created_by_user_id=user_id,
-        approved_by_user_id=user_id,
-        approved_at=now,
+        difficulty=difficulty,
+        hint=hint,
+        explanation=explanation,
+        is_remediation=is_remediation,
+        easier_followup=easier_followup,
+        citation=citation,
     )
-    db.add(version)
-    return activity, version
 
 
 def _fallback_practice_questions(
@@ -223,7 +333,7 @@ def _fallback_practice_questions(
     concepts: List[tuple[Concept, Optional[ConceptVersion]]],
     source_prompts: List[str],
 ) -> List[Dict[str, Any]]:
-    """Deterministic fallback MCQs when Gemini is unavailable or unconfigured."""
+    """Deterministic fallback questions covering all pedagogical styles when Gemini is unavailable."""
     topic = node.title
     c_name = concepts[0][0].canonical_name if concepts else topic
     c_def = (
@@ -235,76 +345,90 @@ def _fallback_practice_questions(
 
     return [
         {
+            "activity_type": "mcq",
             "difficulty": "easy",
-            "question": f"Which statement best describes {c_name}?",
+            "question": f"Which statement best describes the primary objective of {c_name}?",
             "options": [
                 c_def[:180],
-                f"A hardware-only storage protocol unrelated to {topic}",
-                "An uncalibrated random noise generator with no feedback loop",
-                "A purely administrative grading rubric for coursework",
+                f"A storage-only format unrelated to {topic}",
+                "An uncalibrated noise source without signal interpretation",
+                "A purely administrative metric for course logging",
             ],
             "correct_index": 0,
-            "hint": f"Focus on the core definition and role of {c_name} in {topic}.",
+            "hint": f"Focus on the core function of {c_name} in {topic}.",
             "explanation": f"{c_name}: {c_def[:220]}",
+            "citation": f"Course Syllabus & Lecture Slides · {topic}",
             "easier_followup": {
-                "question": f"True or False: {c_name} is a foundational concept studied under {topic}.",
+                "activity_type": "true_false",
+                "question": f"True or False: {c_name} is directly studied under {topic}.",
                 "options": ["True", "False"],
-                "correct_index": 0,
-                "hint": f"Check the topic heading: {topic}.",
+                "correct_option_id": "true",
+                "hint": f"Check the module topic: {topic}.",
                 "explanation": f"Yes, {c_name} is directly part of {topic}.",
             },
         },
         {
+            "activity_type": "true_false",
             "difficulty": "easy",
-            "question": f"In {node.module_title or 'this course'}, which topic directly addresses: \"{sample_prompt[:120]}\"?",
-            "options": [
-                topic,
-                "Unrelated Compiler Optimization",
-                "Database Normalization Forms",
-                "Network Cable Crimping Standards",
-            ],
-            "correct_index": 0,
-            "hint": "Match the question concept to the current roadmap topic.",
-            "explanation": f"This question belongs to {topic} because it tests {c_name}.",
+            "question": f"In {topic}, {c_name} operates deterministically according to established engineering standards.",
+            "correct_value": True,
+            "options": [{"option_id": "true", "text": "True"}, {"option_id": "false", "text": "False"}],
+            "hint": f"Consider whether {c_name} follows systematic principles.",
+            "explanation": f"True: {c_name} provides standardized methodologies in {topic}.",
+            "citation": f"Course Materials · {topic}",
         },
         {
+            "activity_type": "fill_blank",
             "difficulty": "medium",
-            "question": f"Why is {c_name} important when designing or analyzing {topic}?",
-            "options": [
-                f"It establishes how {c_name} operates reliably within {topic}.",
-                "It eliminates the need for any signal or data validation.",
-                "It replaces all system components with static constants.",
-                "It only applies outside engineering and computing contexts.",
+            "question": f"The core concept responsible for analyzing {topic} is [blank_1].",
+            "template": f"The core concept responsible for analyzing {topic} is [blank_1].",
+            "blanks": [
+                {
+                    "blank_id": "blank_1",
+                    "accepted_answers": [c_name, c_name.lower(), topic, topic.lower()],
+                    "explanation": f"{c_name} is the primary focus of this unit.",
+                }
             ],
-            "correct_index": 0,
-            "hint": "Think about what breaks if this concept is ignored in practice.",
-            "explanation": f"Understanding {c_name} ensures reliable analysis and implementation in {topic}.",
+            "hint": f"Name the key subject: {c_name[:15]}...",
+            "explanation": f"{c_name} is the primary analytical framework in {topic}.",
+            "citation": f"Lecture Slides · {topic}",
         },
         {
+            "activity_type": "one_word",
             "difficulty": "medium",
-            "question": f"When applying {topic}, what should you verify first regarding {c_name}?",
-            "options": [
-                "Whether the underlying assumptions and definitions hold for the given scenario",
-                "Whether all labels can be discarded before measurement",
-                "Whether unrelated modules can overwrite the output blindly",
-                "Whether documentation formatting replaces technical correctness",
-            ],
-            "correct_index": 0,
-            "hint": "Good engineering practice starts by checking core assumptions.",
-            "explanation": f"Verifying the assumptions behind {c_name} prevents downstream errors in {topic}.",
+            "question": f"Identify the foundational domain or technology analyzed in: \"{sample_prompt[:140]}\"?",
+            "accepted_answers": [c_name.lower(), topic.lower(), "bci", "brain computer interface"],
+            "hint": f"Refers to {topic}.",
+            "explanation": f"This question addresses {topic} ({c_name}).",
+            "citation": f"Question Paper & Notes · {topic}",
         },
         {
+            "activity_type": "matching_pairs",
             "difficulty": "hard",
-            "question": f"A system built around {topic} shows degraded accuracy. Which diagnostic step directly targets {c_name}?",
-            "options": [
-                f"Evaluate how {c_name} behaves under the observed input conditions and compare against expected behavior.",
-                "Ignore the problem domain and increase random noise.",
-                "Remove all monitoring and evaluation metrics.",
-                "Assume every failure is caused by font rendering.",
+            "question": f"Match each aspect of {topic} with its functional purpose:",
+            "pairs": [
+                {"pair_id": "p1", "left_text": f"{c_name} Theory", "right_text": "Conceptual definitions & models"},
+                {"pair_id": "p2", "left_text": f"{topic} Implementation", "right_text": "Real-time processing & evaluation"},
+                {"pair_id": "p3", "left_text": "System Validation", "right_text": "Verification against specifications"},
             ],
-            "correct_index": 0,
-            "hint": f"Relate the observed issue directly back to {c_name}.",
-            "explanation": f"Targeted diagnosis isolates how {c_name} behaves under real inputs in {topic}.",
+            "hint": "Match the theoretical and practical dimensions.",
+            "explanation": f"Engineering systems in {topic} integrate theory, implementation, and rigorous validation.",
+            "citation": f"Reference Notes · {topic}",
+        },
+        {
+            "activity_type": "ordering",
+            "difficulty": "hard",
+            "question": f"Arrange the typical engineering workflow for {topic} in chronological order:",
+            "items": [
+                {"item_id": "s1", "label": "Requirements Formulation & Sensor Setup"},
+                {"item_id": "s2", "label": "Signal Acquisition & Conditioning"},
+                {"item_id": "s3", "label": "Feature Processing & Analytical Modeling"},
+                {"item_id": "s4", "label": "Output Actuation & Performance Review"},
+            ],
+            "correct_order": ["s1", "s2", "s3", "s4"],
+            "hint": "Begin with requirements setup and conclude with performance review.",
+            "explanation": f"The workflow progresses sequentially from requirements to actuation and verification.",
+            "citation": f"Architecture Overview · {topic}",
         },
     ]
 
@@ -314,6 +438,7 @@ async def _generate_practice_questions_ai(
     node: LearningNode,
     concepts: List[tuple[Concept, Optional[ConceptVersion]]],
     source_prompts: List[str],
+    rag_chunks: Optional[List[tuple[Any, float, str]]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     settings = get_settings()
     if not settings.GEMINI_API_KEY:
@@ -337,35 +462,105 @@ async def _generate_practice_questions_ai(
     ) or f"- {node.title}: {node.description or ''}"
     q_text = "\n".join(f"- {p[:220]}" for p in source_prompts[:8]) or "(No prior exam prompts)"
 
+    rag_text = ""
+    if rag_chunks:
+        rag_text = "\n\nVerified Lecture Slides and Course Documents:\n" + "\n".join(
+            f"[{citation}]: {chunk.content_text[:280]}" for chunk, _, citation in rag_chunks
+        )
+
     prompt = (
-        f"You are creating an interactive adaptive practice session for {subject_name}.\n"
+        f"You are creating an interactive practice question bank for {subject_name}.\n"
         f"Module: {node.module_title or 'Core Module'}\n"
         f"Topic: {node.title}\n"
         f"Description: {node.description or ''}\n\n"
         f"Concepts covered:\n{concept_text}\n\n"
-        f"Reference questions for this topic:\n{q_text}\n\n"
-        "Generate 6 multiple-choice practice questions arranged by difficulty: "
-        "2 'easy' (foundational), 2 'medium' (conceptual), and 2 'hard' (applied/analytical).\n"
-        "Each question must include a short 'hint' (a helpful nudge without spoiling the answer), "
-        "a concise 1-2 sentence 'explanation' shown after answering, and for 'medium'/'hard' questions "
-        "include an 'easier_followup' object (a simpler scaffold question to help a student who gets it wrong).\n\n"
-        "Return valid JSON ONLY (no markdown) matching this schema:\n"
+        f"Reference questions from exam paper for this topic:\n{q_text}"
+        f"{rag_text}\n\n"
+        "Generate 6 diverse, objectively verifiable interactive practice questions strictly grounded in the verified lecture slides and reference questions above.\n"
+        "CRITICAL RULES:\n"
+        "1. Include a mix of question styles:\n"
+        "   - 'mcq' (4 options, exactly 1 correct)\n"
+        "   - 'true_false' (statement testing a key principle, options True and False)\n"
+        "   - 'fill_blank' (sentence with '[blank_1]' and accepted_answers list)\n"
+        "   - 'one_word' (short recall question where answer is a single technical term with accepted_answers list)\n"
+        "   - 'matching_pairs' (3-4 pairs of concepts to definitions/components)\n"
+        "   - 'ordering' (3-5 process steps in chronological sequence)\n"
+        "2. Arrange difficulties: 2 'easy', 2 'medium', 2 'hard'.\n"
+        "3. Every question MUST include:\n"
+        "   - 'hint': A short nudge without revealing the answer.\n"
+        "   - 'explanation': 1-2 sentence pedagogical explanation citing the slide or topic.\n"
+        "   - 'citation': The exact slide deck or document cited (e.g. from the reference text).\n"
+        "   - 'easier_followup': For medium/hard questions, a simpler scaffold question.\n"
+        "4. DO NOT generate long or short subjective answers. All evaluations must be 100% deterministic.\n\n"
+        "Return valid JSON ONLY matching this schema:\n"
         "{\n"
         '  "questions": [\n'
         "    {\n"
+        '      "activity_type": "mcq",\n'
         '      "difficulty": "easy",\n'
-        '      "question": "...",\n'
-        '      "options": ["Option A", "Option B", "Option C", "Option D"],\n'
+        '      "question": "Which component in BCI acquires neural signals?",\n'
+        '      "options": ["Signal Acquisition", "Feature Extraction", "Classifier", "Effector"],\n'
         '      "correct_index": 0,\n'
-        '      "hint": "Short nudge",\n'
-        '      "explanation": "Short clear explanation",\n'
-        '      "easier_followup": {\n'
-        '        "question": "Simpler scaffold question",\n'
-        '        "options": ["Option A", "Option B", "Option C", "Option D"],\n'
-        '        "correct_index": 0,\n'
-        '        "hint": "Simple nudge",\n'
-        '        "explanation": "Simple explanation"\n'
-        "      }\n"
+        '      "hint": "Think about the sensor/electrode stage.",\n'
+        '      "explanation": "Signal acquisition uses electrodes to capture brain activity directly.",\n'
+        '      "citation": "BCI_System_Structure_MODULE 1.pptx · Slide 4"\n'
+        "    },\n"
+        "    {\n"
+        '      "activity_type": "true_false",\n'
+        '      "difficulty": "easy",\n'
+        '      "question": "Non-invasive BCIs require surgical implantation inside the skull.",\n'
+        '      "correct_value": false,\n'
+        '      "hint": "Consider scalp surface EEG.",\n'
+        '      "explanation": "Non-invasive BCIs use scalp sensors with no surgery required.",\n'
+        '      "citation": "Invasive_Partially_Invasive_Non_Invasive_BCI_Comparison.pptx · Slide 3"\n'
+        "    },\n"
+        "    {\n"
+        '      "activity_type": "fill_blank",\n'
+        '      "difficulty": "medium",\n'
+        '      "question": "The physiological monitoring method recording electrical brain activity from the scalp is called [blank_1].",\n'
+        '      "template": "The physiological monitoring method recording electrical brain activity from the scalp is called [blank_1].",\n'
+        '      "blanks": [{"blank_id": "blank_1", "accepted_answers": ["EEG", "electroencephalography", "electroencephalogram"]}],\n'
+        '      "hint": "A 3-letter acronym beginning with E.",\n'
+        '      "explanation": "EEG measures voltage fluctuations from ionic current within the brain neurons.",\n'
+        '      "citation": "BCI_System_Structure_MODULE 1.pptx · Slide 6"\n'
+        "    },\n"
+        "    {\n"
+        '      "activity_type": "one_word",\n'
+        '      "difficulty": "medium",\n'
+        '      "question": "What type of BCI places electrodes directly on the exposed surface of the brain (ECoG)?",\n'
+        '      "accepted_answers": ["partially invasive", "partially-invasive", "semi-invasive", "ECoG"],\n'
+        '      "hint": "It is between fully invasive and non-invasive.",\n'
+        '      "explanation": "Partially invasive BCIs use electrocorticography on the cortex surface.",\n'
+        '      "citation": "Invasive_Partially_Invasive_Non_Invasive_BCI_Comparison.pptx · Slide 5"\n'
+        "    },\n"
+        "    {\n"
+        '      "activity_type": "matching_pairs",\n'
+        '      "difficulty": "hard",\n'
+        '      "question": "Match each BCI type with its characteristic recording location:",\n'
+        '      "pairs": [\n'
+        '        {"pair_id": "p1", "left_text": "Non-Invasive", "right_text": "Scalp Surface (EEG)"},\n'
+        '        {"pair_id": "p2", "left_text": "Partially Invasive", "right_text": "Cortical Surface (ECoG)"},\n'
+        '        {"pair_id": "p3", "left_text": "Invasive", "right_text": "Inside Grey Matter (Microelectrodes)"}\n'
+        '      ],\n'
+        '      "hint": "Associate the invasiveness depth with tissue penetration.",\n'
+        '      "explanation": "Non-invasive is on scalp, partially invasive is subdural, and invasive penetrates cortical tissue.",\n'
+        '      "citation": "Invasive_Partially_Invasive_Non_Invasive_BCI_Comparison.pptx · Slide 8"\n'
+        "    },\n"
+        "    {\n"
+        '      "activity_type": "ordering",\n'
+        '      "difficulty": "hard",\n'
+        '      "question": "Arrange the standard BCI pipeline stages in sequential order:",\n'
+        '      "items": [\n'
+        '        {"item_id": "s1", "label": "Signal Acquisition"},\n'
+        '        {"item_id": "s2", "label": "Signal Preprocessing & Artifact Removal"},\n'
+        '        {"item_id": "s3", "label": "Feature Extraction"},\n'
+        '        {"item_id": "s4", "label": "Classification & Decoding"},\n'
+        '        {"item_id": "s5", "label": "Device Control / Feedback"}\n'
+        '      ],\n'
+        '      "correct_order": ["s1", "s2", "s3", "s4", "s5"],\n'
+        '      "hint": "Start with signal input and end with device actuation.",\n'
+        '      "explanation": "The BCI pipeline flows from acquisition through preprocessing, feature extraction, classification, and device actuation.",\n'
+        '      "citation": "BCI_System_Structure_MODULE 1.pptx · Slide 2"\n'
         "    }\n"
         "  ]\n"
         "}\n"
@@ -398,7 +593,7 @@ async def _generate_practice_questions_ai(
                 parsed = json.loads(raw)
                 items = parsed.get("questions") if isinstance(parsed, dict) else parsed
                 if isinstance(items, list) and len(items) >= 3:
-                    return [q for q in items if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list)]
+                    return [q for q in items if isinstance(q, dict) and (q.get("question") or q.get("template"))]
     except Exception as exc:
         logger.warning("Adaptive practice AI generation failed node=%s error=%s", node.id, exc)
     return None
@@ -411,7 +606,6 @@ async def _load_node_mcq_versions(db: AsyncSession, node_id: uuid.UUID) -> List[
         .where(
             Activity.learning_node_id == node_id,
             Activity.status == "active",
-            ActivityVersion.activity_type == "mcq",
             ActivityVersion.approval_status == "approved",
         )
         .order_by(ActivityVersion.created_at.asc())
@@ -424,10 +618,12 @@ async def _ensure_node_practice_bank(
     node: LearningNode,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
+    *,
+    force: bool = False,
 ) -> List[ActivityVersion]:
     existing = await _load_node_mcq_versions(db, node.id)
     main_items = [v for v in existing if not (v.scoring_config_json or {}).get("is_remediation")]
-    if len(main_items) >= 3:
+    if not force and len(main_items) >= 3:
         return existing
 
     # Gather node concepts and source prompts
@@ -461,31 +657,39 @@ async def _ensure_node_practice_bank(
         ).scalars().all()
     )
 
-    generated = await _generate_practice_questions_ai(db, node, concepts_with_ver, source_prompts)
+    # Retrieve relevant RAG chunks from slides, notes, and syllabus for this node
+    rag_chunks = await find_top_k_chunks(
+        db,
+        node.course_offering_id,
+        f"{node.title} {node.module_title or ''}",
+        top_k=3,
+    )
+    primary_citation = rag_chunks[0][2] if rag_chunks else None
+
+    generated = await _generate_practice_questions_ai(db, node, concepts_with_ver, source_prompts, rag_chunks=rag_chunks)
     if not generated:
         generated = _fallback_practice_questions(node, concepts_with_ver, source_prompts)
 
-    for idx, q in enumerate(generated, start=1):
-        opts = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()]
-        if len(opts) < 2:
-            continue
+    for idx, q in enumerate(generated, start=len(existing) + 1):
+        act_type = str(q.get("activity_type") or "mcq").lower()
         diff = str(q.get("difficulty") or "easy").lower()
         if diff not in _DIFFICULTY_ORDER:
             diff = "easy"
-        _persist_mcq_activity(
-            db,
-            tenant_id,
-            node.id,
-            user_id,
+        cit = q.get("citation") or primary_citation
+        _persist_practice_activity(
+            db=db,
+            tenant_id=tenant_id,
+            node_id=node.id,
+            user_id=user_id,
             title=f"{node.title} · Q{idx}",
-            question_text=str(q["question"]),
-            options=opts,
-            correct_index=int(q.get("correct_index", 0) or 0),
-            explanation=str(q.get("explanation") or f"Review the key idea of {node.title}."),
-            hint=str(q.get("hint") or f"Think about the fundamental rule in {node.title}."),
+            activity_type=act_type,
+            raw_payload=q,
             difficulty=diff,
+            hint=str(q.get("hint") or f"Think about the core rule of {node.title}."),
+            explanation=str(q.get("explanation") or f"Review the key idea of {node.title}."),
             is_remediation=False,
             easier_followup=q.get("easier_followup") if isinstance(q.get("easier_followup"), dict) else None,
+            citation=cit,
         )
     await db.flush()
     return await _load_node_mcq_versions(db, node.id)
@@ -779,9 +983,18 @@ class AdaptivePracticeService:
         node = await db.get(LearningNode, session.learning_node_id)
         pool = await _load_node_mcq_versions(db, session.learning_node_id)
 
+        response_payload = {
+            "selected_option_id": data.selected_option_id,
+            "text_answer": data.text_answer,
+            "answer": data.text_answer or data.selected_option_id,
+            "answers": data.answers or {},
+            "pairs": data.pairs or [],
+            "order": data.order or [],
+            "classifications": data.classifications or {},
+        }
         eval_res = evaluate_activity_response(
             activity_type=act_v.activity_type,
-            response_data={"selected_option_id": data.selected_option_id},
+            response_data=response_payload,
             answer_key=act_v.answer_key_json,
             scoring_config=act_v.scoring_config_json,
         )
@@ -789,6 +1002,9 @@ class AdaptivePracticeService:
         ans_key = act_v.answer_key_json or {}
         correct_option_id = ans_key.get("correct_option_id")
         explanation = str(ans_key.get("explanation") or eval_res.feedback or "Review this concept and try the next step.")
+        citation = ans_key.get("citation") or (act_v.scoring_config_json or {}).get("citation")
+        if citation and citation not in explanation:
+            explanation = f"{explanation}\n\n📖 Reference: {citation}"
 
         hint_used_here = bool(
             await db.scalar(
@@ -899,7 +1115,7 @@ class AdaptivePracticeService:
                 is_remediation=was_remediation,
                 is_correct=is_correct,
                 hint_used=hint_used_here,
-                selected_option_id=data.selected_option_id,
+                selected_option_id=data.selected_option_id or (data.text_answer[:80] if data.text_answer else None),
                 metadata_json={"next_difficulty": session.current_difficulty, "node_completed": node_completed},
             )
         )

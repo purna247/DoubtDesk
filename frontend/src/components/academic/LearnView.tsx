@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   BookOpen,
   Brain,
   CheckCircle,
@@ -54,10 +56,13 @@ interface PracticeQuestion {
   activity_version_id: string;
   title: string;
   question: string;
+  activity_type?: string;
   options: { option_id: string; text: string }[];
+  payload?: any;
   difficulty: 'easy' | 'medium' | 'hard' | string;
   is_remediation: boolean;
   has_hint: boolean;
+  citation?: string | null;
 }
 
 interface PracticeSessionState {
@@ -125,6 +130,9 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
   const [practiceSession, setPracticeSession] = useState<PracticeSessionState | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<PracticeQuestion | null>(null);
   const [selectedPracticeOption, setSelectedPracticeOption] = useState<string>('');
+  const [textAnswer, setTextAnswer] = useState<string>('');
+  const [orderingItems, setOrderingItems] = useState<{ item_id: string; label: string }[]>([]);
+  const [matchingPairs, setMatchingPairs] = useState<{ [leftId: string]: string }>({});
   const [hintText, setHintText] = useState<string | null>(null);
   const [loadingHint, setLoadingHint] = useState(false);
   const [checkingAnswer, setCheckingAnswer] = useState(false);
@@ -217,17 +225,74 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
     }
   };
 
+  useEffect(() => {
+    setTextAnswer('');
+    setSelectedPracticeOption('');
+    if (currentQuestion?.activity_type === 'ordering') {
+      const items = (currentQuestion.payload?.items || []).map((i: any) => ({
+        item_id: String(i.item_id),
+        label: String(i.label || i.text || ''),
+      }));
+      setOrderingItems(items);
+    } else {
+      setOrderingItems([]);
+    }
+    setMatchingPairs({});
+  }, [currentQuestion?.activity_version_id]);
+
+  const canSubmitAnswer = useMemo(() => {
+    if (!currentQuestion || Boolean(lastFeedback) || checkingAnswer) return false;
+    const actType = currentQuestion.activity_type || 'mcq';
+    if (actType === 'mcq' || actType === 'true_false') return Boolean(selectedPracticeOption);
+    if (actType === 'one_word' || actType === 'fill_blank') return Boolean(textAnswer.trim());
+    if (actType === 'ordering') return orderingItems.length > 0;
+    if (actType === 'matching_pairs') {
+      const leftCount = (currentQuestion.payload?.left_items || []).length;
+      return Object.keys(matchingPairs).length >= leftCount && leftCount > 0;
+    }
+    return Boolean(selectedPracticeOption || textAnswer.trim());
+  }, [currentQuestion, lastFeedback, checkingAnswer, selectedPracticeOption, textAnswer, orderingItems, matchingPairs]);
+
+  const moveOrderItem = (index: number, direction: 'up' | 'down') => {
+    if (Boolean(lastFeedback) || checkingAnswer) return;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= orderingItems.length) return;
+    const updated = [...orderingItems];
+    const temp = updated[index];
+    updated[index] = updated[targetIndex];
+    updated[targetIndex] = temp;
+    setOrderingItems(updated);
+  };
+
   const submitPracticeAnswer = async () => {
-    if (!practiceSession || !currentQuestion || !selectedPracticeOption || checkingAnswer) return;
+    if (!practiceSession || !currentQuestion || checkingAnswer || !canSubmitAnswer) return;
+    const actType = currentQuestion.activity_type || 'mcq';
+    let payload: any = {
+      activity_version_id: currentQuestion.activity_version_id,
+    };
+
+    if (actType === 'mcq' || actType === 'true_false') {
+      payload.selected_option_id = selectedPracticeOption;
+    } else if (actType === 'one_word') {
+      payload.text_answer = textAnswer.trim();
+      payload.selected_option_id = textAnswer.trim();
+    } else if (actType === 'fill_blank') {
+      payload.text_answer = textAnswer.trim();
+      payload.answers = { blank_1: textAnswer.trim() };
+    } else if (actType === 'ordering') {
+      payload.order = orderingItems.map((i) => i.item_id);
+    } else if (actType === 'matching_pairs') {
+      payload.pairs = Object.entries(matchingPairs).map(([left_id, right_id]) => ({ left_id, right_id }));
+    } else {
+      payload.selected_option_id = selectedPracticeOption || textAnswer.trim();
+    }
+
     setCheckingAnswer(true);
     setError('');
     try {
       const res = await apiClient.post<PracticeAnswerResult>(
         `/api/v1/practice-sessions/${practiceSession.id}/answer`,
-        {
-          activity_version_id: currentQuestion.activity_version_id,
-          selected_option_id: selectedPracticeOption,
-        }
+        payload
       );
       setLastFeedback(res);
       setPracticeSession(res.session);
@@ -244,6 +309,7 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
     setCurrentQuestion(lastFeedback.next_question ?? null);
     setLastFeedback(null);
     setSelectedPracticeOption('');
+    setTextAnswer('');
     setHintText(null);
   };
 
@@ -253,6 +319,7 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
     setCurrentQuestion(null);
     setLastFeedback(null);
     setSelectedPracticeOption('');
+    setTextAnswer('');
     setHintText(null);
     await loadLearnWorkspace(offeringId);
   };
@@ -392,38 +459,187 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
               </div>
             )}
 
-            <div className="space-y-2.5">
-              {currentQuestion.options.map((opt) => {
-                const isSelected = selectedPracticeOption === opt.option_id;
-                let style = 'border-[#DCE7EE] hover:bg-[#F4F7F9] text-[#111111]';
-                if (lastFeedback) {
-                  if (lastFeedback.correct_option_id === opt.option_id) {
-                    style = 'border-emerald-500 bg-emerald-50 text-emerald-950 font-semibold';
-                  } else if (isSelected && !lastFeedback.is_correct) {
-                    style = 'border-rose-400 bg-rose-50 text-rose-900';
-                  } else {
-                    style = 'border-[#DCE7EE] opacity-65';
-                  }
-                } else if (isSelected) {
-                  style = 'border-[#0A8FF5] bg-[#EAF5FF] text-[#0A8FF5] font-semibold';
-                }
+            {/* Answering interface by Activity Type */}
+            {(() => {
+              const actType = currentQuestion.activity_type || 'mcq';
 
+              if (actType === 'fill_blank') {
+                const parts = (currentQuestion.question || '').split(/\[blank_1\]/gi);
                 return (
-                  <button
-                    key={opt.option_id}
-                    type="button"
-                    disabled={Boolean(lastFeedback) || checkingAnswer}
-                    onClick={() => setSelectedPracticeOption(opt.option_id)}
-                    className={`w-full text-left p-3.5 rounded-xl border text-sm transition flex items-center justify-between gap-3 cursor-pointer ${style}`}
-                  >
-                    <span>{opt.text}</span>
-                    {lastFeedback && lastFeedback.correct_option_id === opt.option_id && (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    )}
-                  </button>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 space-y-3">
+                    <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide">
+                      Fill in the missing term:
+                    </p>
+                    <div className="text-sm sm:text-base font-medium text-slate-900 leading-relaxed">
+                      {parts[0]}
+                      <input
+                        type="text"
+                        disabled={Boolean(lastFeedback) || checkingAnswer}
+                        value={textAnswer}
+                        onChange={(e) => setTextAnswer(e.target.value)}
+                        placeholder="missing word..."
+                        className="mx-1 inline-block w-48 rounded-lg border border-amber-400 bg-white px-3 py-1 font-bold text-blue-900 shadow-2xs focus:border-blue-600 focus:outline-hidden"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && textAnswer.trim() && !checkingAnswer && !lastFeedback) {
+                            void submitPracticeAnswer();
+                          }
+                        }}
+                      />
+                      {parts[1] || ''}
+                    </div>
+                  </div>
                 );
-              })}
-            </div>
+              }
+
+              if (actType === 'one_word') {
+                return (
+                  <div className="rounded-xl border border-purple-200 bg-purple-50/40 p-4 space-y-3">
+                    <p className="text-xs font-semibold text-purple-800 uppercase tracking-wide">
+                      Single Keyword / Terminology Recall:
+                    </p>
+                    <input
+                      type="text"
+                      disabled={Boolean(lastFeedback) || checkingAnswer}
+                      value={textAnswer}
+                      onChange={(e) => setTextAnswer(e.target.value)}
+                      placeholder="Type your single keyword or acronym here..."
+                      className="w-full rounded-xl border border-purple-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-900 shadow-2xs focus:border-purple-600 focus:outline-hidden"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && textAnswer.trim() && !checkingAnswer && !lastFeedback) {
+                          void submitPracticeAnswer();
+                        }
+                      }}
+                    />
+                  </div>
+                );
+              }
+
+              if (actType === 'ordering') {
+                return (
+                  <div className="rounded-xl border border-pink-200 bg-pink-50/30 p-4 space-y-3">
+                    <p className="text-xs font-semibold text-pink-800 uppercase tracking-wide">
+                      Arrange in sequential order (Use ▲ / ▼ buttons):
+                    </p>
+                    <div className="space-y-2">
+                      {orderingItems.map((item, idx) => (
+                        <div
+                          key={item.item_id}
+                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-2xs"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-pink-100 text-xs font-bold text-pink-800">
+                              {idx + 1}
+                            </span>
+                            <span className="text-sm font-semibold text-slate-800">{item.label}</span>
+                          </div>
+                          {!lastFeedback && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={idx === 0 || checkingAnswer}
+                                onClick={() => moveOrderItem(idx, 'up')}
+                                className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowUp className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === orderingItems.length - 1 || checkingAnswer}
+                                onClick={() => moveOrderItem(idx, 'down')}
+                                className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowDown className="h-4 w-4" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (actType === 'matching_pairs') {
+                const leftItems: any[] = currentQuestion.payload?.left_items || [];
+                const rightItems: any[] = currentQuestion.payload?.right_items || [];
+                return (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-4 space-y-3">
+                    <p className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">
+                      Match each concept on the left with the correct option on the right:
+                    </p>
+                    <div className="space-y-2.5">
+                      {leftItems.map((left) => (
+                        <div
+                          key={left.pair_id}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3"
+                        >
+                          <span className="text-sm font-bold text-slate-900">{left.text}</span>
+                          <select
+                            disabled={Boolean(lastFeedback) || checkingAnswer}
+                            value={matchingPairs[left.pair_id] || ''}
+                            onChange={(e) =>
+                              setMatchingPairs((prev) => ({ ...prev, [left.pair_id]: e.target.value }))
+                            }
+                            className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                          >
+                            <option value="">-- Select match --</option>
+                            {rightItems.map((right) => (
+                              <option key={right.pair_id} value={right.pair_id}>
+                                {right.text}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              // Standard MCQ & True/False options
+              const displayOpts =
+                currentQuestion.options && currentQuestion.options.length > 0
+                  ? currentQuestion.options
+                  : [
+                      { option_id: 'true', text: 'True' },
+                      { option_id: 'false', text: 'False' },
+                    ];
+
+              return (
+                <div className="space-y-2.5">
+                  {displayOpts.map((opt) => {
+                    const isSelected = selectedPracticeOption === opt.option_id;
+                    let style = 'border-[#DCE7EE] hover:bg-[#F4F7F9] text-[#111111]';
+                    if (lastFeedback) {
+                      if (lastFeedback.correct_option_id === opt.option_id) {
+                        style = 'border-emerald-500 bg-emerald-50 text-emerald-950 font-semibold';
+                      } else if (isSelected && !lastFeedback.is_correct) {
+                        style = 'border-rose-400 bg-rose-50 text-rose-900';
+                      } else {
+                        style = 'border-[#DCE7EE] opacity-65';
+                      }
+                    } else if (isSelected) {
+                      style = 'border-[#0A8FF5] bg-[#EAF5FF] text-[#0A8FF5] font-semibold';
+                    }
+
+                    return (
+                      <button
+                        key={opt.option_id}
+                        type="button"
+                        disabled={Boolean(lastFeedback) || checkingAnswer}
+                        onClick={() => setSelectedPracticeOption(opt.option_id)}
+                        className={`w-full text-left p-3.5 rounded-xl border text-sm transition flex items-center justify-between gap-3 cursor-pointer ${style}`}
+                      >
+                        <span>{opt.text}</span>
+                        {lastFeedback && lastFeedback.correct_option_id === opt.option_id && (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             {lastFeedback ? (
               <div
@@ -443,9 +659,14 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
                     <p className={`font-bold ${lastFeedback.is_correct ? 'text-emerald-900' : 'text-amber-900'}`}>
                       {lastFeedback.feedback_summary}
                     </p>
-                    <p className="text-slate-700 leading-relaxed">
+                    <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
                       <span className="font-semibold">Short explanation:</span> {lastFeedback.explanation}
                     </p>
+                    {currentQuestion.citation && (
+                      <p className="mt-1.5 text-xs font-semibold text-blue-800 bg-white/80 border border-blue-200 rounded px-2.5 py-1 inline-block">
+                        📖 Verified Slide: {currentQuestion.citation}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex justify-end">
@@ -474,7 +695,7 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
                 <button
                   type="button"
                   onClick={() => void submitPracticeAnswer()}
-                  disabled={!selectedPracticeOption || checkingAnswer}
+                  disabled={!canSubmitAnswer || checkingAnswer}
                   className="inline-flex items-center gap-2 rounded-xl bg-[#0A8FF5] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-[#097ED8] disabled:opacity-50 cursor-pointer"
                 >
                   {checkingAnswer ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
@@ -614,7 +835,27 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
             ))}
           </div>
         ) : (
-          <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No published learning nodes are available for this course yet.</p>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-8 text-center my-2 space-y-3">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+              <BookOpen className="h-6 w-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-900 text-base">Course roadmap is in preparation</h3>
+              <p className="text-sm text-slate-600 max-w-md mx-auto">
+                Learning practice will appear here once your faculty approves and publishes the syllabus and past exam materials for this course.
+              </p>
+            </div>
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={onBackToFeed}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Return to Doubts Feed
+              </button>
+            </div>
+          </div>
         )}
       </section>
     </>}

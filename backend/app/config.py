@@ -79,8 +79,8 @@ class Settings(BaseSettings):
 
     # LLM & AI Services
     GEMINI_API_KEY: str = Field(default="", description="Gemini API Key")
-    GEMINI_MODEL: str = Field(default="gemini-3.8-flash", description="Primary Tier-1 Gemini model")
-    GEMINI_FALLBACK_MODELS: str = Field(default="gemini-3.6-flash,gemini-2.5-flash", description="Comma-separated Tier-1 fallback models")
+    GEMINI_MODEL: str = Field(default="gemini-3.5-flash-lite", description="Primary Tier-1 Gemini model")
+    GEMINI_FALLBACK_MODELS: str = Field(default="gemini-3.1-flash-lite,gemini-flash-lite-latest", description="Comma-separated Tier-1 fallback models")
     GEMINI_REPAIR_MODEL: str = Field(default="gemini-3.5-flash-lite", description="Higher-volume model for surgical item repairs")
     GEMINI_MAX_OUTPUT_TOKENS: int = Field(default=24000, ge=1000, le=240000)
 

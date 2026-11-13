@@ -33,8 +33,8 @@ CONFIDENCE_THRESHOLD=0.80
 MAX_INPUT_TOKENS=210_000
 QUESTION_BATCH_SIZE=45
 _MODEL_COOLDOWN_UNTIL:dict[str,float]={}
-RPM_LIMITS={"gemini-3.8-flash":5,"gemini-3.6-flash":5,"gemini-2.5-flash":5,"gemini-3.5-flash-lite":15}
-RPD_LIMITS={"gemini-3.8-flash":20,"gemini-3.6-flash":20,"gemini-2.5-flash":20,"gemini-3.5-flash-lite":500}
+RPM_LIMITS={"gemini-3.5-flash-lite":15,"gemini-3.1-flash-lite":15,"gemini-flash-lite-latest":15,"gemini-3.8-flash":5,"gemini-3.6-flash":5,"gemini-2.5-flash":5}
+RPD_LIMITS={"gemini-3.5-flash-lite":500,"gemini-3.1-flash-lite":500,"gemini-flash-lite-latest":500,"gemini-3.8-flash":20,"gemini-3.6-flash":20,"gemini-2.5-flash":20}
 TOKENS_PER_MINUTE=250_000
 LABEL_STOPLIST={"subject code","course code","credits","course outcomes","course outcome","references","textbooks","course objectives","course objective","assessment scheme","contents"}
 

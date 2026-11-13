@@ -32,7 +32,7 @@ from app.modules.learning.schemas import (
 )
 from app.modules.learning.scoring import ActivityEvaluationResult
 from app.modules.learning.service import LearningService
-from app.modules.learning.practice_service import AdaptivePracticeService
+from app.modules.learning.practice_service import AdaptivePracticeService, _ensure_node_practice_bank
 from app.modules.knowledge.service import KnowledgeService
 
 router = APIRouter(tags=["Learning Nodes & Structured Activities"])
@@ -239,12 +239,17 @@ async def list_node_activities_teacher(
     user: UserProfile = Depends(require_teacher),
     db: AsyncSession = Depends(get_db),
 ) -> List[ActivityOut]:
-    """Teacher view of all activities under a node including answer keys."""
+    """Teacher view of all active activities under a node including answer keys."""
     tenant_id = _get_tenant_id(user)
     stmt = (
         select(Activity)
         .options(selectinload(Activity.versions))
-        .where(Activity.learning_node_id == node_id, Activity.institution_id == tenant_id)
+        .where(
+            Activity.learning_node_id == node_id,
+            Activity.institution_id == tenant_id,
+            Activity.status != "archived",
+        )
+        .order_by(Activity.created_at.asc())
     )
     activities = (await db.execute(stmt)).scalars().all()
     results: List[ActivityOut] = []
@@ -262,6 +267,125 @@ async def list_node_activities_teacher(
             )
         )
     return results
+
+
+@router.post("/learning-nodes/{node_id}/generate-practice-questions", response_model=List[ActivityOut])
+async def generate_node_practice_questions(
+    node_id: uuid.UUID,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> List[ActivityOut]:
+    """Generate grounded practice questions for this node using question paper items and lecture slides."""
+    tenant_id = _get_tenant_id(user)
+    node = await db.get(LearningNode, node_id)
+    if not node or node.institution_id != tenant_id:
+        raise AppException(status_code=404, code="NODE_NOT_FOUND", message="Learning node not found.")
+
+    await _ensure_node_practice_bank(db, node, tenant_id, uuid.UUID(user.id), force=True)
+    await db.commit()
+
+    stmt = (
+        select(Activity)
+        .options(selectinload(Activity.versions))
+        .where(Activity.learning_node_id == node_id, Activity.status == "active")
+        .order_by(Activity.created_at.asc())
+    )
+    acts = (await db.execute(stmt)).scalars().all()
+    results = []
+    for a in acts:
+        v = a.versions[-1] if a.versions else None
+        results.append(
+            ActivityOut(
+                id=a.id,
+                institution_id=a.institution_id,
+                learning_node_id=a.learning_node_id,
+                question_id=a.question_id,
+                status=a.status,
+                created_at=a.created_at,
+                latest_version=ActivityVersionOut.model_validate(v) if v else None,
+            )
+        )
+    return results
+
+
+@router.post("/courses/{offering_id}/generate-all-practice-questions")
+async def generate_all_course_practice_questions(
+    offering_id: uuid.UUID,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Generate grounded practice questions for every node in this course offering."""
+    tenant_id = _get_tenant_id(user)
+    stmt = (
+        select(LearningNode)
+        .where(LearningNode.course_offering_id == offering_id, LearningNode.institution_id == tenant_id)
+        .order_by(LearningNode.sequence_no.asc())
+    )
+    nodes = (await db.execute(stmt)).scalars().all()
+    total_generated = 0
+    for node in nodes:
+        bank = await _ensure_node_practice_bank(db, node, tenant_id, uuid.UUID(user.id))
+        total_generated += len(bank)
+    await db.commit()
+    return {"status": "ok", "nodes_count": len(nodes), "total_questions": total_generated}
+
+
+@router.patch("/activities/{activity_id}", response_model=ActivityOut)
+async def update_activity(
+    activity_id: uuid.UUID,
+    req: ActivityCreate,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> ActivityOut:
+    """Update an existing activity's question text, options, answer key, and explanation."""
+    tenant_id = _get_tenant_id(user)
+    activity = await LearningService.update_activity(
+        db=db,
+        activity_id=activity_id,
+        tenant_id=tenant_id,
+        user_id=uuid.UUID(user.id),
+        data=req,
+    )
+    v_stmt = (
+        select(ActivityVersion)
+        .where(ActivityVersion.activity_id == activity.id)
+        .order_by(ActivityVersion.version_number.desc())
+        .limit(1)
+    )
+    latest_v = (await db.execute(v_stmt)).scalars().first()
+    return ActivityOut(
+        id=activity.id,
+        institution_id=activity.institution_id,
+        learning_node_id=activity.learning_node_id,
+        question_id=activity.question_id,
+        status=activity.status,
+        created_at=activity.created_at,
+        latest_version=ActivityVersionOut.model_validate(latest_v) if latest_v else None,
+    )
+
+
+@router.delete("/activities/{activity_id}", response_model=ActivityOut)
+async def archive_activity(
+    activity_id: uuid.UUID,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> ActivityOut:
+    """Archive / delete a practice activity so it is immediately removed from student practice."""
+    tenant_id = _get_tenant_id(user)
+    activity = await LearningService.archive_activity(
+        db=db,
+        activity_id=activity_id,
+        tenant_id=tenant_id,
+    )
+    return ActivityOut(
+        id=activity.id,
+        institution_id=activity.institution_id,
+        learning_node_id=activity.learning_node_id,
+        question_id=activity.question_id,
+        status=activity.status,
+        created_at=activity.created_at,
+        latest_version=None,
+    )
 
 
 # ------------------------------------------------------------------------------

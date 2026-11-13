@@ -17,6 +17,7 @@ from app.modules.sources.models import (
 )
 from app.modules.sources.storage import StorageService
 from app.modules.sources.extractors import DocumentExtractionEngine, ExtractionResult
+from app.modules.sources.embeddings import compute_batch_embeddings
 from app.modules.jobs.service import JobService
 from app.modules.jobs.models import BackgroundJob
 from app.modules.sources.academic_pipeline import process_academic_document
@@ -300,6 +301,18 @@ class SourceService:
             db.add(source_chunk)
             persisted_chunks.append(source_chunk)
         await db.flush()
+
+        # Compute semantic embeddings for document chunks if Gemini API key is configured
+        if persisted_chunks:
+            try:
+                texts_to_embed = [c.content_text for c in persisted_chunks]
+                embeddings = await compute_batch_embeddings(texts_to_embed)
+                for sc, emb in zip(persisted_chunks, embeddings):
+                    if emb:
+                        sc.embedding_json = emb
+                await db.flush()
+            except Exception as emb_exc:
+                logger.debug("Failed computing chunk embeddings: %s", emb_exc)
 
         # Persist assets
         await JobService.update_progress(db, job_id, "persisting_assets", 85.0, "Storing extracted visual assets.")

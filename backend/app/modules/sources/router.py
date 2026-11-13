@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional, List
 from urllib.parse import quote
-from fastapi import APIRouter, Depends, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,7 @@ from app.modules.sources.schemas import (
     StudentStudyMaterialOut,
     SourceDocumentReviewRequest,
     TeacherSourceMaterialOut,
+    RagSearchResultOut,
 )
 from app.modules.sources.service import SourceService
 from app.modules.jobs.service import JobService
@@ -437,4 +438,35 @@ async def get_job_status(
             for ev in job.events
         ] if job.events else [],
     )
+
+
+@router.get("/courses/{offering_id}/sources/rag-search", response_model=List[RagSearchResultOut])
+async def search_course_materials_rag(
+    offering_id: uuid.UUID,
+    query: str = Query(..., min_length=2, description="Search query or doubt question"),
+    limit: int = Query(3, ge=1, le=10),
+    user: UserProfile = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> List[RagSearchResultOut]:
+    """Semantic RAG search over course lecture slides, notes, and syllabus chunks."""
+    from app.modules.sources.embeddings import find_top_k_chunks
+    top_chunks = await find_top_k_chunks(db=db, course_offering_id=offering_id, query=query, top_k=limit)
+    results: List[RagSearchResultOut] = []
+    for chunk, score, citation in top_chunks:
+        doc = chunk.document
+        results.append(
+            RagSearchResultOut(
+                chunk_id=str(chunk.id),
+                document_id=str(chunk.source_document_id),
+                document_title=doc.display_filename if doc else "Course Document",
+                source_type=doc.source_type if doc else "notes",
+                page_number=chunk.page_number,
+                slide_number=chunk.slide_number,
+                section_path=chunk.section_path,
+                content_text=chunk.content_text,
+                citation=citation,
+                score=round(score, 4),
+            )
+        )
+    return results
 
