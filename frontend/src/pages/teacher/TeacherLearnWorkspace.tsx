@@ -67,10 +67,33 @@ interface ActivityItem {
 
 type WorkspaceTab = 'questions' | 'author' | 'settings';
 
-export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = ({ offerings }) => {
+export const TeacherLearnWorkspace: React.FC<{
+  offerings: CourseOffering[];
+  selectedSubject?: string;
+}> = ({ offerings, selectedSubject }) => {
   const [offeringId, setOfferingId] = useState(offerings[0]?.id ?? '');
   const [selectedId, setSelectedId] = useState('');
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('questions');
+
+  useEffect(() => {
+    if (selectedSubject && selectedSubject !== 'all') {
+      const match = offerings.find(
+        (o) => o.id === selectedSubject || o.curriculum_subject_entry_id === selectedSubject
+      );
+      if (match) {
+        setOfferingId(match.id);
+        return;
+      }
+    }
+    if (!offeringId && offerings[0]?.id) {
+      setOfferingId(offerings[0].id);
+    }
+  }, [selectedSubject, offerings, offeringId]);
+
+  const currentOffering = useMemo(
+    () => offerings.find((o) => o.id === offeringId) || offerings[0],
+    [offerings, offeringId]
+  );
 
   // Topic form state
   const [title, setTitle] = useState('');
@@ -628,80 +651,40 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
 
   return (
     <div className="space-y-4 pb-12">
-      {/* Sleek Header */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-4 sm:p-5 rounded-[16px] border border-[#DCE7EE] shadow-xs">
+      {/* Unified Course Action Bar */}
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white px-5 py-4 rounded-[16px] border border-[#DCE7EE] shadow-xs">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-md bg-[#EAF5FF] px-2 py-0.5 text-xs font-bold text-[#0A8FF5]">
-              FACULTY WORKSPACE
-            </span>
-            <span className="text-xs text-[#71808C]">·</span>
-            <span className="text-xs font-semibold text-[#71808C]">Adaptive Learning & Roadmap</span>
+          <h1 className="text-lg sm:text-xl font-bold text-[#111111]">
+            {[currentOffering?.official_subject_code, currentOffering?.subject_name].filter(Boolean).join(' · ') || 'Course Roadmap'}
+          </h1>
+          <div className="mt-1 flex items-center gap-2 text-xs text-[#71808C] flex-wrap">
+            <span>{summary.modules_count || 4} modules</span>
+            <span>·</span>
+            <span>{nodes.length} topics</span>
+            <span>·</span>
+            <span>{summary.questions_count || 0} questions</span>
+            <span>·</span>
+            {allNodesPublished ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-semibold">
+                <Check className="h-3 w-3" /> All Published
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-0.5 text-[11px] font-semibold">
+                {summary.draft_nodes_count} in Draft
+              </span>
+            )}
           </div>
-          <h1 className="mt-1 text-xl font-bold text-[#111111]">Course Roadmap & Practice Bank</h1>
         </div>
 
-        {/* Course Offering Dropdown */}
-        <div className="sm:w-72">
-          <select
-            value={offeringId}
-            onChange={(event) => setOfferingId(event.target.value)}
-            className="w-full rounded-xl border border-[#DCE7EE] bg-[#F8FAFC] px-3 py-2 text-xs font-semibold text-[#111111] focus:bg-white focus:outline-none focus:border-[#0A8FF5]"
-          >
-            {offerings.map((offering) => (
-              <option key={offering.id} value={offering.id}>
-                {[offering.official_subject_code, offering.subject_name].filter(Boolean).join(' · ')}
-              </option>
-            ))}
-          </select>
-        </div>
-      </header>
-
-      {/* Alert / Notification Banner */}
-      {message && (
-        <div className="flex items-center justify-between rounded-lg bg-blue-50 border border-blue-200 px-4 py-2.5 text-sm text-blue-800">
-          <p className="font-medium">{message}</p>
-          <button onClick={() => setMessage('')} className="text-blue-500 hover:text-blue-700">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {/* Compact Status & Action Bar */}
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/90 bg-white px-4 py-3 shadow-2xs">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded-md bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
-            📚 {summary.modules_count || 4} Modules
-          </span>
-          <span className="rounded-md bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
-            🎯 {nodes.length} Topics
-          </span>
-          <span className="rounded-md bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
-            ❓ {summary.questions_count || 0} Questions Parsed
-          </span>
-          <span className="rounded-md bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
-            📜 {summary.approved_syllabus_count || 0} Syllabus Units Approved
-          </span>
-          {allNodesPublished ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs font-bold text-emerald-700">
-              <Check className="h-3.5 w-3.5" /> All Topics Published & Live
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs font-bold text-amber-800">
-              🟡 {summary.draft_nodes_count} Topics in Draft
-            </span>
-          )}
-        </div>
-
-        {/* Global Actions */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Global Primary Actions */}
+        <div className="flex items-center gap-2.5 flex-wrap">
           {canGenerateRoadmap && (
             <Button
               type="button"
               variant="outline"
               onClick={() => void startExtraction()}
               disabled={busy || loading || academicExtraction.isPending}
-              className="text-xs h-8"
+              className="text-xs h-9 px-3.5 border-[#DCE7EE] text-[#111111] hover:bg-[#F4F7F9]"
             >
               {academicExtraction.isPending ? 'Queueing…' : 'Generate Roadmap'}
             </Button>
@@ -712,7 +695,7 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
             variant="outline"
             onClick={() => void generateAllCoursePractice()}
             disabled={busy || loading || isGeneratingAll || !nodes.length}
-            className="text-xs h-8 border-blue-200 text-blue-700 hover:bg-blue-50"
+            className="text-xs h-9 px-3.5 border-[#DCE7EE] text-[#111111] hover:bg-[#F4F7F9]"
           >
             {isGeneratingAll ? (
               <>
@@ -731,10 +714,10 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
             type="button"
             onClick={() => void publishAll()}
             disabled={busy || loading || allNodesPublished || generationActive}
-            className={`text-xs h-8 ${
+            className={`text-xs h-9 px-4 font-semibold ${
               allNodesPublished
-                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-default'
-                : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                ? 'bg-[#F4F7F9] text-[#71808C] border border-[#DCE7EE] cursor-default'
+                : 'btn-primary'
             }`}
           >
             {allNodesPublished ? (
@@ -748,21 +731,30 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
             )}
           </Button>
         </div>
-      </section>
+      </header>
+
+      {/* Alert / Notification Banner */}
+      {message && (
+        <div className="flex items-center justify-between rounded-xl bg-[#EAF5FF] border border-[#B8D9F5] px-4 py-2.5 text-sm text-[#0A8FF5]">
+          <p className="font-medium">{message}</p>
+          <button onClick={() => setMessage('')} className="text-[#0A8FF5] hover:opacity-75 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Main 2-Column Split Workspace */}
-      <div className="grid gap-4 xl:grid-cols-[290px_minmax(0,1fr)] grid-cols-1 items-start">
+      <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)] items-start">
         {/* Left Column: Clean Roadmap Topic Outline */}
         <nav
           aria-label="Roadmap Outline"
-          className="rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs space-y-3 max-h-[calc(100vh-190px)] overflow-y-auto"
+          className="rounded-[16px] border border-[#DCE7EE] bg-white p-3.5 shadow-xs space-y-3 max-h-[calc(100vh-190px)] overflow-y-auto"
         >
-          <div className="flex items-center justify-between px-1 pb-1 border-b border-slate-100">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-              <BookOpen className="h-3.5 w-3.5 text-blue-600" />
+          <div className="flex items-center justify-between px-2 pb-2 border-b border-[#DCE7EE]">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-[#71808C] flex items-center gap-1.5">
+              <BookOpen className="h-3.5 w-3.5 text-[#0A8FF5]" />
               Roadmap Topics ({nodes.length})
             </h2>
-            <span className="text-2xs font-semibold text-slate-400">Click to select</span>
           </div>
 
           {loading ? (
@@ -785,18 +777,18 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                         <button
                           key={node.id}
                           onClick={() => selectNode(node.id)}
-                          className={`w-full rounded-lg px-2.5 py-2 text-left transition flex items-start gap-2 ${
+                          className={`w-full rounded-xl px-3 py-2.5 text-left transition flex items-start gap-2.5 cursor-pointer ${
                             isSelected
-                              ? 'bg-blue-50/90 text-blue-900 font-semibold border-l-4 border-blue-600 shadow-2xs'
-                              : 'text-slate-700 hover:bg-slate-50 border-l-4 border-transparent'
+                              ? 'bg-[#EAF5FF] text-[#0A8FF5] font-semibold border border-[#B8D9F5]'
+                              : 'text-[#111111] hover:bg-[#F4F7F9] border border-transparent'
                           }`}
                         >
-                          <span className="text-2xs font-mono text-slate-400 mt-0.5">{node.sequence_no}.</span>
+                          <span className="text-[11px] font-mono text-[#71808C] mt-0.5">{node.sequence_no}.</span>
                           <div className="min-w-0 flex-1">
                             <p className="text-xs leading-snug line-clamp-2">{node.title}</p>
                             <div className="mt-1 flex items-center gap-1.5">
                               <span
-                                className={`inline-block rounded px-1.5 py-0.2 text-3xs font-bold uppercase ${
+                                className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
                                   isPublished
                                     ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                     : 'bg-amber-50 text-amber-800 border border-amber-200'
@@ -814,37 +806,36 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
               ))}
             </div>
           ) : (
-            <p className="p-3 text-xs text-slate-500 text-center">No roadmap nodes available.</p>
+            <p className="p-3 text-xs text-[#71808C] text-center">No roadmap nodes available.</p>
           )}
         </nav>
 
         {/* Right Column: Selected Topic Workspace with Tabs */}
-        <main className="space-y-3">
+        <main className="space-y-4">
           {selectedNode ? (
             <>
               {/* Topic Header Card */}
-              <div className="rounded-xl border border-slate-200/90 bg-white p-4 shadow-2xs">
+              <div className="rounded-[16px] border border-[#DCE7EE] bg-white p-5 shadow-xs">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-2xs font-bold uppercase tracking-wider text-slate-400">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-[#0A8FF5]">
                         {selectedNode.module_title || 'Roadmap Topic'}
                       </span>
-                      <span className="text-xs text-slate-300">·</span>
+                      <span className="text-xs text-[#71808C]">·</span>
                       <span
-                        className={`rounded px-1.5 py-0.5 text-2xs font-bold uppercase ${
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
                           selectedNode.status === 'published'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-amber-50 text-amber-800 border border-amber-200'
                         }`}
                       >
-                        {selectedNode.status === 'published' ? '🟢 Published to Students' : '🟡 Draft Mode'}
+                        {selectedNode.status === 'published' ? 'Published to Students' : 'Draft'}
                       </span>
-                      <span className="text-2xs text-slate-400">Rev {selectedNode.revision}</span>
                     </div>
-                    <h2 className="mt-1 text-lg font-bold text-slate-900">{selectedNode.title}</h2>
+                    <h2 className="mt-1.5 text-lg sm:text-xl font-bold text-[#111111]">{selectedNode.title}</h2>
                     {selectedNode.description && (
-                      <p className="mt-1 text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                      <p className="mt-1 text-xs text-[#71808C] line-clamp-2 leading-relaxed">
                         {selectedNode.description}
                       </p>
                     )}
@@ -857,7 +848,7 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                         type="button"
                         onClick={() => void publishCurrentNode()}
                         disabled={busy}
-                        className="text-xs h-7.5 bg-emerald-600 text-white hover:bg-emerald-700"
+                        className="text-xs h-8 bg-emerald-600 text-white hover:bg-emerald-700"
                       >
                         <Send className="mr-1 h-3.5 w-3.5" /> Publish This Topic
                       </Button>
@@ -866,22 +857,22 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                     <button
                       type="button"
                       onClick={() => setPreview((v) => !v)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE7EE] bg-white px-3 py-1.5 text-xs font-semibold text-[#111111] hover:bg-[#F4F7F9] transition cursor-pointer"
                     >
-                      <Eye className="h-3.5 w-3.5 text-slate-500" />
+                      <Eye className="h-3.5 w-3.5 text-[#71808C]" />
                       {preview ? 'Exit Student Preview' : 'Student Preview'}
                     </button>
                   </div>
                 </div>
 
                 {/* Tab Navigation */}
-                <div className="flex items-center gap-1 border-b border-slate-100 mt-4 pt-1">
+                <div className="flex items-center gap-2 border-b border-[#DCE7EE] mt-5 pt-1">
                   <button
                     onClick={() => setActiveTab('questions')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition ${
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
                       activeTab === 'questions'
-                        ? 'border-blue-600 text-blue-600'
-                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                        ? 'border-[#0A8FF5] text-[#0A8FF5]'
+                        : 'border-transparent text-[#71808C] hover:text-[#111111]'
                     }`}
                   >
                     <HelpCircle className="h-3.5 w-3.5" />
@@ -889,10 +880,10 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                   </button>
                   <button
                     onClick={() => setActiveTab('author')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition ${
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
                       activeTab === 'author'
-                        ? 'border-blue-600 text-blue-600'
-                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                        ? 'border-[#0A8FF5] text-[#0A8FF5]'
+                        : 'border-transparent text-[#71808C] hover:text-[#111111]'
                     }`}
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -900,10 +891,10 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                   </button>
                   <button
                     onClick={() => setActiveTab('settings')}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition ${
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
                       activeTab === 'settings'
-                        ? 'border-blue-600 text-blue-600'
-                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                        ? 'border-[#0A8FF5] text-[#0A8FF5]'
+                        : 'border-transparent text-[#71808C] hover:text-[#111111]'
                     }`}
                   >
                     <Settings className="h-3.5 w-3.5" />
@@ -914,35 +905,32 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
 
               {/* Student Preview Modal/Box */}
               {preview && (
-                <div className="rounded-xl border-2 border-blue-400 bg-blue-50/30 p-4 space-y-2">
+                <div className="rounded-xl border border-[#B8D9F5] bg-[#EAF5FF]/40 p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-2xs font-bold uppercase tracking-wider text-blue-700 flex items-center gap-1">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#0A8FF5] flex items-center gap-1">
                       <Eye className="h-3.5 w-3.5" /> Student View Simulation
                     </span>
                     <button
                       onClick={() => setPreview(false)}
-                      className="text-slate-400 hover:text-slate-600 text-xs"
+                      className="text-[#71808C] hover:text-[#111111] text-xs font-semibold cursor-pointer"
                     >
                       Close
                     </button>
                   </div>
-                  <h3 className="text-base font-bold text-slate-900">{title}</h3>
-                  <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
+                  <h3 className="text-base font-bold text-[#111111]">{title}</h3>
+                  <p className="text-xs text-[#4D5963] leading-relaxed whitespace-pre-wrap">
                     {description || 'No objective or syllabus description set for this topic.'}
-                  </p>
-                  <p className="text-2xs text-slate-400 pt-1">
-                    Enrolled students see this topic in their learning map along with the practice questions below.
                   </p>
                 </div>
               )}
 
               {/* TAB 1: PRACTICE BANK */}
               {activeTab === 'questions' && (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {/* Filter & Action Toolbar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-3 rounded-xl border border-slate-200/90 shadow-2xs">
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-[16px] border border-[#DCE7EE] shadow-xs">
                     {/* Filter Pills */}
-                    <div className="flex flex-wrap items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       {[
                         { key: 'all', label: `All (${nodeActivities.length})` },
                         { key: 'mcq', label: `MCQ (${countsByType.mcq})` },
@@ -953,10 +941,10 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                         <button
                           key={item.key}
                           onClick={() => setActivityTypeFilter(item.key)}
-                          className={`rounded-md px-2.5 py-1 text-2xs font-semibold transition ${
+                          className={`rounded-full px-3 py-1.5 text-xs font-bold transition cursor-pointer ${
                             activityTypeFilter === item.key
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              ? 'bg-[#111111] text-white shadow-xs'
+                              : 'bg-[#EDF4F8] text-[#4D5963] hover:bg-[#E2ECF2]'
                           }`}
                         >
                           {item.label}
@@ -970,7 +958,7 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                         type="button"
                         onClick={() => void generateNodePractice()}
                         disabled={isGeneratingPractice || busy}
-                        className="text-xs h-7.5 bg-blue-600 text-white hover:bg-blue-700"
+                        className="btn-primary text-xs h-8.5 inline-flex items-center gap-1"
                       >
                         {isGeneratingPractice ? (
                           <>
@@ -984,14 +972,15 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                           </>
                         )}
                       </Button>
-                      <button
+
+                      <Button
                         type="button"
                         onClick={() => setActiveTab('author')}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                        className="btn-outline text-xs h-8.5 inline-flex items-center gap-1"
                       >
-                        <Plus className="h-3.5 w-3.5 text-blue-600" />
+                        <Plus className="h-3.5 w-3.5" />
                         Add Question
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -1207,17 +1196,17 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                         return (
                           <div
                             key={act.id}
-                            className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5 shadow-2xs hover:border-slate-300 transition"
+                            className="rounded-[14px] border border-[#DCE7EE] bg-white p-4 sm:p-5 space-y-3 shadow-xs hover:border-[#0A8FF5]/40 transition"
                           >
                             {/* Card Top Strip */}
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="text-xs font-mono font-bold text-slate-400">#{index + 1}</span>
-                                <span className={`rounded px-1.5 py-0.2 text-3xs font-bold uppercase border ${typeBadgeStyle[actType] || 'bg-slate-100 text-slate-700'}`}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-mono font-bold text-[#71808C]">#{index + 1}</span>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase border ${typeBadgeStyle[actType] || 'bg-slate-100 text-slate-700'}`}>
                                   {actType.replace(/_/g, ' ')}
                                 </span>
                                 <span
-                                  className={`rounded px-1.5 py-0.2 text-3xs font-semibold capitalize border ${
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize border ${
                                     diff === 'hard'
                                       ? 'bg-rose-50 text-rose-700 border-rose-200'
                                       : diff === 'medium'
@@ -1256,26 +1245,26 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
                             </div>
 
                             {/* Question Prompt */}
-                            <p className="text-xs font-semibold text-slate-900 leading-snug">
+                            <p className="text-sm font-semibold text-[#111111] leading-snug">
                               {payload.question || payload.template || ver?.title}
                             </p>
 
                             {/* Answer Display */}
                             {actType === 'mcq' && Array.isArray(payload.options) && (
-                              <div className="grid gap-1.5 sm:grid-cols-2 pt-0.5">
+                              <div className="grid gap-2 sm:grid-cols-2 pt-1">
                                 {payload.options.map((opt: any) => {
                                   const isCorrect = opt.option_id === key.correct_option_id;
                                   return (
                                     <div
                                       key={opt.option_id}
-                                      className={`rounded-lg border px-2.5 py-1 text-2xs flex items-center justify-between ${
+                                      className={`rounded-xl border px-3 py-2 text-xs flex items-center justify-between ${
                                         isCorrect
-                                          ? 'border-emerald-300 bg-emerald-50/80 font-semibold text-emerald-900'
-                                          : 'border-slate-200/80 bg-slate-50/50 text-slate-700'
+                                          ? 'border-emerald-300 bg-emerald-50 text-emerald-900 font-semibold'
+                                          : 'border-[#DCE7EE] bg-[#F8FAFC] text-[#4D5963]'
                                       }`}
                                     >
                                       <span className="truncate">{opt.text}</span>
-                                      {isCorrect && <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0 ml-1" />}
+                                      {isCorrect && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0 ml-1.5" />}
                                     </div>
                                   );
                                 })}

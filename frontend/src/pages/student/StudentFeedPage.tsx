@@ -431,6 +431,8 @@ export const StudentFeedPage: React.FC = () => {
     return <div className="min-h-screen grid place-items-center bg-[#F8FAFC] text-sm text-slate-600">Loading your workspace…</div>;
   }
 
+  const isTeacherLearn = role === 'TEACHER' && activeNavTab === 'learn';
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
       {/* 1. Global Header with prototype styling and functionality */}
@@ -468,7 +470,13 @@ export const StudentFeedPage: React.FC = () => {
         />
       ) : (
         <main className="flex-1 w-full max-w-[1540px] mx-auto px-3 sm:px-6 py-5 sm:py-6">
-          <div className="grid grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)_290px] xl:grid-cols-[230px_minmax(0,1fr)_320px] 2xl:grid-cols-[240px_minmax(0,820px)_340px] gap-4 lg:gap-5 xl:gap-7 justify-center">
+          <div
+            className={`grid grid-cols-1 ${
+              isTeacherLearn
+                ? 'md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]'
+                : 'md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)_290px] xl:grid-cols-[230px_minmax(0,1fr)_320px] 2xl:grid-cols-[240px_minmax(0,820px)_340px]'
+            } gap-4 lg:gap-5 xl:gap-7 justify-center`}
+          >
             
             {/* Column 1: Left Subjects Navigation Column */}
             <DesktopSidebar
@@ -489,7 +497,7 @@ export const StudentFeedPage: React.FC = () => {
             />
 
             {/* Column 2: Main Content Column */}
-            <section className="min-w-0 max-w-[820px] w-full mx-auto md:mx-0">
+            <section className={`min-w-0 ${isTeacherLearn ? 'w-full' : 'max-w-[820px] w-full mx-auto md:mx-0'}`}>
               {viewMode === 'post' && activeDoubt ? (
                 /* DEDICATED POST DETAIL VIEW */
                 <PostDetailView
@@ -504,7 +512,7 @@ export const StudentFeedPage: React.FC = () => {
               ) : activeNavTab === 'learn' ? (
                 /* AI ADAPTIVE LEARNING & WEAKNESS REMEDIATION */
                 role === 'TEACHER' ? (
-                  <TeacherLearnWorkspace offerings={teacherOfferings} />
+                  <TeacherLearnWorkspace offerings={teacherOfferings} selectedSubject={selectedSubject} />
                 ) : (
                   <LearnView
                     selectedSubject={selectedSubject}
@@ -604,24 +612,26 @@ export const StudentFeedPage: React.FC = () => {
               )}
             </section>
 
-            {/* Column 3: Right Sidebar — unified for all roles */}
-            <RightSidebar
-              role={role}
-              teacherOfferings={teacherOfferings}
-              facultyName={studentDisplayName}
-              studentName={studentDisplayName}
-              semester={studentSemester}
-              avatarUrl={user?.avatar_url || user?.avatarUrl}
-              stats={myStats}
-              isLoadingStats={isStatsLoading}
-              onOpenProfile={handleOpenProfile}
-              onSelectContributor={(name) => {
-                setSearchQuery(name);
-                setViewMode('feed');
-                setActiveDoubtId(null);
-                showToast(`Showing questions answered by ${name}`);
-              }}
-            />
+            {/* Column 3: Right Sidebar — hidden on Teacher Learn tab for maximum studio workspace */}
+            {!isTeacherLearn && (
+              <RightSidebar
+                role={role}
+                teacherOfferings={teacherOfferings}
+                facultyName={studentDisplayName}
+                studentName={studentDisplayName}
+                semester={studentSemester}
+                avatarUrl={user?.avatar_url || user?.avatarUrl}
+                stats={myStats}
+                isLoadingStats={isStatsLoading}
+                onOpenProfile={handleOpenProfile}
+                onSelectContributor={(name) => {
+                  setSearchQuery(name);
+                  setViewMode('feed');
+                  setActiveDoubtId(null);
+                  showToast(`Showing questions answered by ${name}`);
+                }}
+              />
+            )}
 
           </div>
         </main>
