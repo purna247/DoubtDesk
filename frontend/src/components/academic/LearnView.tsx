@@ -5,7 +5,6 @@ import {
   ArrowRight,
   ArrowUp,
   BookOpen,
-  Brain,
   CheckCircle,
   CheckCircle2,
   HelpCircle,
@@ -102,7 +101,7 @@ interface PracticeAnswerResult {
   next_question?: PracticeQuestion | null;
 }
 
-interface LearnViewProps { onBackToFeed: () => void; selectedSubject?: string; offerings: CourseOffering[] }
+interface LearnViewProps { selectedSubject?: string; offerings: CourseOffering[] }
 
 const DIFFICULTY_STYLES: Record<string, string> = {
   easy: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -117,7 +116,7 @@ const formatRankLabel = (rank?: number | null): string => {
   return `Level ${rank} · Advanced`;
 };
 
-export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubject = 'all', offerings }) => {
+export const LearnView: React.FC<LearnViewProps> = ({ selectedSubject = 'all', offerings }) => {
   const courseOptions = useMemo(() => offerings.filter((o) => selectedSubject === 'all' || o.curriculum_subject_entry_id === selectedSubject), [offerings, selectedSubject]);
   const [offeringId, setOfferingId] = useState('');
   const [nodes, setNodes] = useState<LearningNode[]>([]);
@@ -719,15 +718,6 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
     {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
     {loading ? <div className="rounded-2xl border bg-white p-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin"/>Loading published learning content…</div> : !offeringId ? <div className="rounded-2xl border bg-white p-10 text-center"><BookOpen className="mx-auto mb-3 h-7 w-7 text-slate-400"/><h2 className="font-bold">No enrolled course offerings found</h2><p className="mt-2 text-sm text-slate-500">Learning content appears here after you are enrolled in a course.</p></div> : <>
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Brain className="h-5 w-5 text-blue-600" />
-            <div>
-              <h2 className="font-bold">Learning map</h2>
-              <p className="text-xs text-slate-500">Organized by module, topic, and difficulty — learn through practice and immediate feedback.</p>
-            </div>
-          </div>
-        </div>
         {groupedModules.length ? (
           <div className="space-y-5">
             {groupedModules.map((group) => (
@@ -845,20 +835,9 @@ export const LearnView: React.FC<LearnViewProps> = ({ onBackToFeed, selectedSubj
                 Learning practice will appear here once your faculty approves and publishes the syllabus and past exam materials for this course.
               </p>
             </div>
-            <div className="pt-1">
-              <button
-                type="button"
-                onClick={onBackToFeed}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Return to Doubts Feed
-              </button>
-            </div>
           </div>
         )}
       </section>
     </>}
-    <button onClick={onBackToFeed} className="btn-outline inline-flex items-center gap-2 px-4 py-2 text-sm"><ArrowLeft className="h-4 w-4"/>Back to Doubts Feed</button>
-  </div>;
+    </div>;
 };

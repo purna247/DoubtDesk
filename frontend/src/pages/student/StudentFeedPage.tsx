@@ -559,7 +559,6 @@ export const StudentFeedPage: React.FC = () => {
               ) : activeNavTab === 'learn' ? (
                 /* AI ADAPTIVE LEARNING & WEAKNESS REMEDIATION */
                 <LearnView
-                  onBackToFeed={() => handleNavTabSelect('doubts')}
                   selectedSubject={selectedSubject}
                   offerings={studentOfferings}
                 />
