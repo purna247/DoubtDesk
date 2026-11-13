@@ -468,28 +468,58 @@ export const StudentFeedPage: React.FC = () => {
         />
       ) : role === 'TEACHER' && ['studymaterial', 'learn', 'quiz', 'teacher_doubts', 'teacher_analytics'].includes(activeNavTab) ? (
         <main className="flex-1 w-full max-w-[1540px] mx-auto px-3 sm:px-6 py-5 sm:py-6">
-          {activeNavTab === 'studymaterial' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-4 lg:gap-5 xl:gap-7 items-start">
-              <TeacherMaterialsPage embedded />
-            </div>
-          ) : activeNavTab === 'learn' ? (
-            <TeacherLearnWorkspace offerings={teacherOfferings} />
-          ) : activeNavTab === 'quiz' ? (
-            <QuizView offerings={teacherOfferings} selectedSubject={selectedSubject} onShowToast={showToast} />
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-4 lg:gap-5 xl:gap-7 items-start">
-              <section className="min-w-0">
-                {activeNavTab === 'teacher_doubts' ? <TeacherDoubtReviewTab /> : <TeacherAnalyticsPage offerings={teacherOfferings} />}
-              </section>
-              <aside className="rounded-2xl border border-[#DCE7EE] bg-white p-5">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5]">Assigned courses</p>
-                {teacherOfferings.length ? <ul className="mt-3 space-y-3">{teacherOfferings.map((offering) => <li key={offering.id} className="border-b border-slate-100 pb-3 last:border-0 last:pb-0">
-                  <p className="text-sm font-semibold text-slate-900">{offering.subject_name || offering.official_subject_code || 'Assigned course'}</p>
-                  <p className="mt-1 text-xs text-slate-500">{[offering.official_subject_code, offering.section_code, offering.term_code].filter(Boolean).join(' · ')}</p>
-                </li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No assigned course offerings were returned.</p>}
+          {/* Shared teacher right-aside (Assigned Courses) — reused across tabs */}
+          {(() => {
+            const teacherAside = (
+              <aside className="rounded-2xl border border-[#DCE7EE] bg-white p-5 sticky top-6">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5]">Faculty Workspace</p>
+                <p className="mt-1 text-sm font-bold text-[#111111]">{user?.full_name || user?.email || 'Faculty'}</p>
+                <p className="text-xs text-[#71808C]">Faculty</p>
+                <p className="mt-4 text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5]">Assigned courses</p>
+                {teacherOfferings.length ? (
+                  <ul className="mt-3 space-y-3">
+                    {teacherOfferings.map((offering) => (
+                      <li key={offering.id} className="border-b border-[#DCE7EE] pb-3 last:border-0 last:pb-0">
+                        <p className="text-sm font-semibold text-[#111111]">{offering.subject_name || offering.official_subject_code || 'Assigned course'}</p>
+                        <p className="mt-0.5 text-xs text-[#71808C]">{[offering.official_subject_code, offering.section_code, offering.term_code].filter(Boolean).join(' · ')}</p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-3 text-sm text-[#71808C]">No assigned course offerings were returned.</p>
+                )}
               </aside>
-            </div>
-          )}
+            );
+            if (activeNavTab === 'studymaterial') {
+              return (
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_290px] xl:grid-cols-[minmax(0,1fr)_320px] gap-4 lg:gap-5 xl:gap-7 items-start">
+                  <section className="min-w-0"><TeacherMaterialsPage embedded /></section>
+                  {teacherAside}
+                </div>
+              );
+            }
+            if (activeNavTab === 'learn') {
+              return <TeacherLearnWorkspace offerings={teacherOfferings} />;
+            }
+            if (activeNavTab === 'quiz') {
+              return (
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_290px] xl:grid-cols-[minmax(0,1fr)_320px] gap-4 lg:gap-5 xl:gap-7 items-start">
+                  <section className="min-w-0">
+                    <QuizView offerings={teacherOfferings} selectedSubject={selectedSubject} onShowToast={showToast} />
+                  </section>
+                  {teacherAside}
+                </div>
+              );
+            }
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_290px] xl:grid-cols-[minmax(0,1fr)_320px] gap-4 lg:gap-5 xl:gap-7 items-start">
+                <section className="min-w-0">
+                  {activeNavTab === 'teacher_doubts' ? <TeacherDoubtReviewTab /> : <TeacherAnalyticsPage offerings={teacherOfferings} />}
+                </section>
+                {teacherAside}
+              </div>
+            );
+          })()}
         </main>
       ) : (
         <main className="flex-1 w-full max-w-[1540px] mx-auto px-3 sm:px-6 py-5 sm:py-6">
