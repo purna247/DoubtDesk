@@ -32,7 +32,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   const displayName = user?.fullName || user?.full_name || user?.email?.split('@')[0] || 'User';
   const initials = displayName.slice(0, 2).toUpperCase();
-  const institution = user?.institutionName || user?.institution_name;
   const isStudent = role === 'STUDENT';
 
   const getRoleBadge = () => {
@@ -60,11 +59,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <span className="text-lg sm:text-xl font-bold tracking-tight text-[#111111] select-none leading-none">
             Doubt<span className="text-[#0A8FF5]">Desk</span>
           </span>
-          {institution && (
-            <span className="hidden lg:inline-block text-xs font-medium text-[#71808C] border-l border-[#DCE7EE] pl-3">
-              {institution}
-            </span>
-          )}
         </button>
 
         {/* Search bar — shared across all roles */}

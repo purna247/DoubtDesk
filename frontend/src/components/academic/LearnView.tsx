@@ -713,131 +713,158 @@ export const LearnView: React.FC<LearnViewProps> = ({ selectedSubject = 'all', o
   }
 
   return <div className="space-y-5">
-    {selectedSubject !== 'all' && selectedCourse && <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">Learning workspace · {selectedCourse.subject_name || selectedCourse.official_subject_code}</div>}
-    {courseOptions.length > 1 && <label className="block text-sm font-semibold text-slate-700">Course offering<select className="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5" value={offeringId} onChange={(e) => setOfferingId(e.target.value)}>{courseOptions.map((o) => <option key={o.id} value={o.id}>{[o.official_subject_code, o.subject_name, o.section_code].filter(Boolean).join(' · ')}</option>)}</select></label>}
+    {selectedSubject !== 'all' && selectedCourse && (
+      <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#EAF5FF] border border-[#B8D9F5]">
+        <span className="text-xs font-semibold text-[#0A8FF5]">Learning workspace ·</span>
+        <span className="text-xs font-bold text-[#111111]">{selectedCourse.subject_name || selectedCourse.official_subject_code}</span>
+      </div>
+    )}
+    {courseOptions.length > 1 && (
+      <label className="block text-sm font-semibold text-[#111111]">
+        Course offering
+        <select
+          className="mt-2 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3 py-2.5 text-sm text-[#111111] focus:outline-none focus:border-[#0A8FF5]"
+          value={offeringId}
+          onChange={(e) => setOfferingId(e.target.value)}
+        >
+          {courseOptions.map((o) => (
+            <option key={o.id} value={o.id}>{[o.official_subject_code, o.subject_name, o.section_code].filter(Boolean).join(' · ')}</option>
+          ))}
+        </select>
+      </label>
+    )}
     {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
-    {loading ? <div className="rounded-2xl border bg-white p-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin"/>Loading published learning content…</div> : !offeringId ? <div className="rounded-2xl border bg-white p-10 text-center"><BookOpen className="mx-auto mb-3 h-7 w-7 text-slate-400"/><h2 className="font-bold">No enrolled course offerings found</h2><p className="mt-2 text-sm text-slate-500">Learning content appears here after you are enrolled in a course.</p></div> : <>
-      <section className="rounded-2xl border border-slate-200 bg-white p-5">
-        {groupedModules.length ? (
-          <div className="space-y-5">
-            {groupedModules.map((group) => (
-              <div key={group.moduleTitle} className="space-y-2.5">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 px-1">
-                  {group.moduleTitle}
-                </h3>
-                <ol className="space-y-2.5">
-                  {group.nodes.map((node) => {
-                    const completed = node.progress_status === 'completed';
-                    const unlocked = Boolean(node.is_unlocked);
-                    const stats = node.practice_summary;
-                    return (
-                      <li
-                        key={node.id}
-                        className={`rounded-xl border p-4 transition ${
-                          completed
-                            ? 'border-emerald-200 bg-emerald-50/40'
-                            : unlocked
-                              ? 'border-slate-200 bg-white hover:border-blue-200'
-                              : 'border-slate-200 bg-slate-50/70 opacity-80'
+    {loading ? (
+      <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 text-center text-sm text-[#71808C]">
+        <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-[#0A8FF5]" />
+        Loading published learning content…
+      </div>
+    ) : !offeringId ? (
+      <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 sm:p-14 text-center">
+        <div className="w-14 h-14 rounded-full bg-[#F4F7F9] flex items-center justify-center text-[#71808C] mx-auto mb-4 shadow-xs">
+          <BookOpen className="h-7 w-7" />
+        </div>
+        <h2 className="text-lg font-bold text-[#111111] mb-2">No enrolled course offerings found</h2>
+        <p className="text-sm text-[#71808C]">Learning content appears here after you are enrolled in a course.</p>
+      </div>
+    ) : groupedModules.length ? (
+      <div className="space-y-6">
+        {groupedModules.map((group) => (
+          <div key={group.moduleTitle} className="space-y-3">
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#0A8FF5] px-1">
+              {group.moduleTitle}
+            </h3>
+            <ol className="space-y-3">
+              {group.nodes.map((node) => {
+                const completed = node.progress_status === 'completed';
+                const unlocked = Boolean(node.is_unlocked);
+                const stats = node.practice_summary;
+                return (
+                  <li
+                    key={node.id}
+                    className={`rounded-[14px] border p-4 sm:p-5 transition ${
+                      completed
+                        ? 'border-emerald-200 bg-emerald-50/40'
+                        : unlocked
+                          ? 'border-[#DCE7EE] bg-white hover:border-[#0A8FF5]/50 shadow-xs'
+                          : 'border-[#DCE7EE] bg-[#F8FAFC] opacity-75'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <span className="mt-0.5 shrink-0">
+                          {completed ? (
+                            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                          ) : unlocked ? (
+                            <CheckCircle className="h-5 w-5 text-[#0A8FF5]" />
+                          ) : (
+                            <Lock className="h-5 w-5 text-[#71808C]" />
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="font-semibold text-[#111111]">{node.title}</h4>
+                            <span className="rounded-full bg-[#F4F7F9] px-2.5 py-0.5 text-[11px] font-semibold text-[#4D5963]">
+                              {formatRankLabel(node.difficulty_rank)}
+                            </span>
+                          </div>
+                          {node.description && (
+                            <p className="mt-1 text-sm leading-relaxed text-[#71808C]">{node.description}</p>
+                          )}
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#71808C]">
+                            <span>
+                              {completed
+                                ? 'Completed'
+                                : unlocked
+                                  ? 'Available'
+                                  : 'Complete previous topic to unlock'}
+                            </span>
+                            <span>· {node.concept_ids.length} mapped concepts</span>
+                            {(node.question_count ?? 0) > 0 && (
+                              <span>· {node.question_count} questions</span>
+                            )}
+                            {stats && (
+                              <>
+                                <span className="text-emerald-700 font-medium">
+                                  · {stats.correct_count}/{stats.target_correct_count} mastered
+                                </span>
+                                {stats.hints_used > 0 && <span>· {stats.hints_used} hints</span>}
+                                {stats.improving && (
+                                  <span className="text-emerald-700 font-medium">· Improving</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={!unlocked || startingNodeId === node.id}
+                        onClick={() => void startNodePractice(node)}
+                        className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold shrink-0 cursor-pointer disabled:cursor-not-allowed ${
+                          unlocked
+                            ? completed
+                              ? 'border border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-50'
+                              : 'bg-[#0A8FF5] text-white hover:bg-[#097ED8]'
+                            : 'bg-[#F4F7F9] text-[#71808C]'
                         }`}
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="flex items-start gap-3 min-w-0 flex-1">
-                            <span className="mt-0.5 shrink-0">
-                              {completed ? (
-                                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                              ) : unlocked ? (
-                                <CheckCircle className="h-5 w-5 text-blue-600" />
-                              ) : (
-                                <Lock className="h-5 w-5 text-slate-400" />
-                              )}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h4 className="font-semibold text-slate-900">{node.title}</h4>
-                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                  {formatRankLabel(node.difficulty_rank)}
-                                </span>
-                              </div>
-                              {node.description && (
-                                <p className="mt-1 text-sm leading-relaxed text-slate-600">{node.description}</p>
-                              )}
-                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                                <span>
-                                  {completed
-                                    ? 'Completed'
-                                    : unlocked
-                                      ? 'Available'
-                                      : 'Complete previous topic to unlock'}
-                                </span>
-                                <span>· {node.concept_ids.length} mapped concepts</span>
-                                {(node.question_count ?? 0) > 0 && (
-                                  <span>· {node.question_count} questions</span>
-                                )}
-                                {stats && (
-                                  <>
-                                    <span className="text-emerald-700 font-medium">
-                                      · {stats.correct_count}/{stats.target_correct_count} mastered
-                                    </span>
-                                    {stats.hints_used > 0 && <span>· {stats.hints_used} hints</span>}
-                                    {stats.improving && (
-                                      <span className="text-emerald-700 font-medium">· Improving</span>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            disabled={!unlocked || startingNodeId === node.id}
-                            onClick={() => void startNodePractice(node)}
-                            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold shrink-0 cursor-pointer disabled:cursor-not-allowed ${
-                              unlocked
-                                ? completed
-                                  ? 'border border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-50'
-                                  : 'bg-[#0A8FF5] text-white hover:bg-[#097ED8]'
-                                : 'bg-slate-200 text-slate-500'
-                            }`}
-                          >
-                            {startingNodeId === node.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : unlocked ? (
-                              <Play className="w-3.5 h-3.5" />
-                            ) : (
-                              <Lock className="w-3.5 h-3.5" />
-                            )}
-                            {completed
-                              ? 'Practice Again'
-                              : stats && stats.questions_answered > 0
-                                ? 'Continue'
-                                : unlocked
-                                  ? 'Start Practice'
-                                  : 'Locked'}
-                          </button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </div>
-            ))}
+                        {startingNodeId === node.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : unlocked ? (
+                          <Play className="w-3.5 h-3.5" />
+                        ) : (
+                          <Lock className="w-3.5 h-3.5" />
+                        )}
+                        {completed
+                          ? 'Practice Again'
+                          : stats && stats.questions_answered > 0
+                            ? 'Continue'
+                            : unlocked
+                              ? 'Start Practice'
+                              : 'Locked'}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
-        ) : (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-8 text-center my-2 space-y-3">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-              <BookOpen className="h-6 w-6" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-bold text-slate-900 text-base">Course roadmap is in preparation</h3>
-              <p className="text-sm text-slate-600 max-w-md mx-auto">
-                Learning practice will appear here once your faculty approves and publishes the syllabus and past exam materials for this course.
-              </p>
-            </div>
-          </div>
-        )}
-      </section>
-    </>}
+        ))}
+      </div>
+    ) : (
+      <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 sm:p-12 text-center space-y-3">
+        <div className="w-14 h-14 rounded-full bg-[#F4F7F9] flex items-center justify-center text-[#71808C] mx-auto mb-4 shadow-xs">
+          <BookOpen className="h-7 w-7" />
+        </div>
+        <div className="space-y-1">
+          <h3 className="font-bold text-[#111111] text-base">Course roadmap is in preparation</h3>
+          <p className="text-sm text-[#71808C] max-w-md mx-auto">
+            Learning practice will appear here once your faculty approves and publishes the syllabus and past exam materials for this course.
+          </p>
+        </div>
+      </div>
+    )}
     </div>;
 };
