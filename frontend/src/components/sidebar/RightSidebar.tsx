@@ -9,6 +9,7 @@ import {
   HelpCircle,
   CheckCheck
 } from 'lucide-react';
+import type { CourseOffering } from '../../types/academics';
 
 export interface InfluencePeriodStats {
   popularity: number;
@@ -29,6 +30,9 @@ export interface MyDoubtStats {
 }
 
 interface RightSidebarProps {
+  role?: string | null;
+  teacherOfferings?: CourseOffering[];
+  facultyName?: string;
   onSelectContributor?: (name: string) => void;
   onOpenProfile?: () => void;
   studentName?: string;
@@ -63,6 +67,9 @@ const renderDeltaBadge = (delta?: number | null) => {
 };
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({
+  role,
+  teacherOfferings = [],
+  facultyName = 'Faculty',
   onOpenProfile,
   studentName = 'Student Scholar',
   semester = 'Enrolled Student',
@@ -75,6 +82,56 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   const answeredCount = stats?.answered_count ?? 0;
   const askedCount = stats?.asked_count ?? 0;
   const progressDashOffset = Math.max(0, 170 - Math.min(100, (answeredCount + askedCount) * 10) * 1.7);
+
+  if (role === 'TEACHER') {
+    return (
+      <aside className="w-[290px] xl:w-[320px] 2xl:w-[340px] shrink-0 hidden lg:flex flex-col gap-5 sticky top-6">
+        <div className="sidebar-card border border-[#DCE7EE] rounded-[16px] bg-white p-5 shadow-xs">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5]">
+            Faculty Workspace
+          </p>
+          <div className="mt-3 flex items-center gap-3">
+            <div className="w-11 h-11 rounded-full bg-[#0F172A] text-white flex items-center justify-center font-bold text-sm tracking-wide shrink-0 overflow-hidden">
+              {avatarUrl ? (
+                <img src={avatarUrl} alt={facultyName} className="w-full h-full object-cover" />
+              ) : (
+                <span>{getInitials(facultyName)}</span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-bold text-[#111111] leading-tight truncate">
+                {facultyName}
+              </h3>
+              <p className="text-xs text-[#71808C] mt-0.5 font-medium">Faculty</p>
+            </div>
+          </div>
+
+          <div className="h-[1px] bg-[#E8EFF3] my-4" />
+
+          <p className="text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5] mb-2.5">
+            Assigned courses
+          </p>
+
+          {teacherOfferings.length > 0 ? (
+            <ul className="space-y-3">
+              {teacherOfferings.map((offering) => (
+                <li key={offering.id} className="border-b border-[#DCE7EE] pb-3 last:border-0 last:pb-0">
+                  <p className="text-sm font-semibold text-[#111111] leading-snug">
+                    {offering.subject_name || offering.official_subject_code || 'Assigned course'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-[#71808C]">
+                    {[offering.official_subject_code, offering.section_code && `Sec ${offering.section_code}`, offering.term_code].filter(Boolean).join(' · ')}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-[#71808C]">No assigned course offerings returned.</p>
+          )}
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="w-[290px] xl:w-[320px] 2xl:w-[340px] shrink-0 hidden lg:flex flex-col gap-5">

@@ -627,18 +627,18 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
   };
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto pb-12">
+    <div className="space-y-4 pb-12">
       {/* Sleek Header */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs">
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-4 sm:p-5 rounded-[16px] border border-[#DCE7EE] shadow-xs">
         <div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-700">
+            <span className="inline-flex items-center rounded-md bg-[#EAF5FF] px-2 py-0.5 text-xs font-bold text-[#0A8FF5]">
               FACULTY WORKSPACE
             </span>
-            <span className="text-xs text-slate-400">·</span>
-            <span className="text-xs font-semibold text-slate-500">Adaptive Learning & Roadmap</span>
+            <span className="text-xs text-[#71808C]">·</span>
+            <span className="text-xs font-semibold text-[#71808C]">Adaptive Learning & Roadmap</span>
           </div>
-          <h1 className="mt-1 text-xl font-bold text-slate-900">Course Roadmap & Practice Bank</h1>
+          <h1 className="mt-1 text-xl font-bold text-[#111111]">Course Roadmap & Practice Bank</h1>
         </div>
 
         {/* Course Offering Dropdown */}
@@ -646,7 +646,7 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
           <select
             value={offeringId}
             onChange={(event) => setOfferingId(event.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-xl border border-[#DCE7EE] bg-[#F8FAFC] px-3 py-2 text-xs font-semibold text-[#111111] focus:bg-white focus:outline-none focus:border-[#0A8FF5]"
           >
             {offerings.map((offering) => (
               <option key={offering.id} value={offering.id}>
@@ -751,7 +751,7 @@ export const TeacherLearnWorkspace: React.FC<{ offerings: CourseOffering[] }> = 
       </section>
 
       {/* Main 2-Column Split Workspace */}
-      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)] items-start">
+      <div className="grid gap-4 xl:grid-cols-[290px_minmax(0,1fr)] grid-cols-1 items-start">
         {/* Left Column: Clean Roadmap Topic Outline */}
         <nav
           aria-label="Roadmap Outline"

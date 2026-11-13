@@ -51,7 +51,7 @@ interface JobStatus {
 }
 
 
-export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
+export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedded: _embedded = false }) => {
   const [offerings, setOfferings] = useState<CourseOffering[]>([]);
   const [offeringId, setOfferingId] = useState('');
   const [document, setDocument] = useState<SourceDocument | null>(null);
@@ -190,14 +190,14 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
   const isProcessing = Boolean(job && !['succeeded', 'completed', 'failed', 'dead_letter'].includes(job.status));
 
   return (
-    <div className={embedded ? 'contents' : 'space-y-5'}>
-      <header className={embedded ? 'col-span-full' : undefined}>
+    <div className="space-y-5">
+      <header>
         <p className="text-xs font-bold uppercase tracking-wide text-[#0A8FF5]">Faculty course studio</p>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">Course materials</h1>
-        <p className="mt-1 text-sm text-slate-600">Upload once and continue teaching. Successfully processed materials appear for enrolled students automatically.</p>
+        <h1 className="mt-1 text-xl sm:text-2xl font-bold text-[#111111]">Course materials</h1>
+        <p className="mt-1 text-sm text-[#71808C]">Upload once and continue teaching. Successfully processed materials appear for enrolled students automatically.</p>
       </header>
 
-      <div className={embedded ? 'contents' : 'grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-5 items-start'}>
+      <div className="space-y-5 min-w-0">
         <div className="space-y-5 min-w-0">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
             <h2 className="font-bold text-slate-900">Upload course material</h2>
@@ -250,17 +250,17 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
             {job && ['succeeded', 'completed'].includes(job.status) && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-900">Processing complete. This course material is now available to enrolled students.</p>}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
-            <h2 className="font-bold text-slate-900">Processing status</h2>
-            <p className="text-sm leading-relaxed text-slate-600">Text, tables, headings, and source references are processed in the background. Job progress and extraction diagnostics are available here; no teacher approval is needed for this uploaded file.</p>
-            {chunks.length > 0 && <p className="text-xs text-slate-500">{chunks.length} extracted source blocks are available in the Preprocessor result panel.</p>}
+          <section className="rounded-2xl border border-[#DCE7EE] bg-white p-5 space-y-3">
+            <h2 className="font-bold text-[#111111]">Processing status</h2>
+            <p className="text-sm leading-relaxed text-[#71808C]">Text, tables, headings, and source references are processed in the background. Job progress and extraction diagnostics are available here; no teacher approval is needed for this uploaded file.</p>
+            {chunks.length > 0 && <p className="text-xs text-[#71808C]">{chunks.length} extracted source blocks are available in the Preprocessor result panel.</p>}
           </section>
         </div>
 
-        <aside className="rounded-2xl border border-slate-200 bg-white p-5 xl:sticky xl:top-5 max-h-[calc(100vh-2.5rem)] overflow-y-auto">
+        <section className="rounded-2xl border border-[#DCE7EE] bg-white p-5">
           <div className="flex items-start gap-3 mb-4">
-            <span className="rounded-xl bg-blue-50 p-2 text-blue-600"><FileText className="h-5 w-5" /></span>
-            <div><h2 className="font-bold text-slate-900">Processing details</h2><p className="mt-1 text-xs text-slate-500">Optional diagnostics for teachers and developers.</p></div>
+            <span className="rounded-xl bg-[#EAF5FF] p-2 text-[#0A8FF5]"><FileText className="h-5 w-5" /></span>
+            <div><h2 className="font-bold text-[#111111]">Processing details</h2><p className="mt-1 text-xs text-[#71808C]">Optional diagnostics for teachers and developers.</p></div>
           </div>
           {document ? <div className="mb-4 rounded-xl bg-slate-50 p-3 text-xs">
             <p className="font-semibold text-slate-800 break-words">{document.original_filename}</p>
@@ -280,7 +280,7 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
             <div className="mb-1 flex items-center justify-between gap-2"><h3 className="text-xs font-bold text-slate-800 truncate">{chunk.section_path || `Extracted section ${chunk.chunk_index + 1}`}</h3><span className="shrink-0 text-[10px] text-slate-400">{chunk.page_number ? `p. ${chunk.page_number}` : chunk.chunk_type}</span></div>
             <p className="text-xs leading-relaxed text-slate-600 whitespace-pre-wrap line-clamp-8">{chunk.content_text}</p>
           </article>)}</div> : document && ['succeeded', 'completed'].includes(job?.status ?? '') && <p className="text-xs text-slate-500">Preprocessing finished, but this document produced no text sections.</p>}
-        </aside>
+        </section>
       </div>
     </div>
   );
