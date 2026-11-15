@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, Check, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
+import { AlertCircle, BarChart3, Check, Loader2, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { MisconceptionReportPanel } from '../../components/academic/MisconceptionReportPanel';
 import { useCourseMisconceptions } from '../../hooks/useCourseMisconceptions';
@@ -18,6 +18,12 @@ interface ConceptAnalytics {
   cohort_mean_accuracy?: number | null;
   cohort_pooled_accuracy?: number | null;
   tagged_misconception_count: number;
+  practice_attempt_count: number;
+  practice_struggle_count: number;
+  practice_hints_used: number;
+  doubt_count: number;
+  doubt_unanswered_count: number;
+  triangulated_risk_level: 'critical' | 'moderate' | 'healthy' | 'insufficient_evidence';
   computed_at: string;
 }
 
@@ -87,6 +93,7 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
   const [report, setReport] = useState<InterventionReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingIntervention, setSavingIntervention] = useState(false);
+  const [draftingPrimer, setDraftingPrimer] = useState(false);
   const [message, setMessage] = useState('');
 
   const {
@@ -182,6 +189,30 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
     }
   };
 
+  const draftPrimerWithAI = async () => {
+    if (!offeringId || !activeConceptId) return;
+    try {
+      setDraftingPrimer(true);
+      setMessage('');
+      const res = await apiClient.post<{
+        primer_draft: string;
+        concept_name: string;
+        key_doubt_themes: string[];
+      }>(`/api/v1/courses/${offeringId}/interventions/draft-primer`, {
+        concept_id: activeConceptId,
+      });
+      setPrimer(res.primer_draft);
+      if (!title.trim() && res.concept_name) {
+        setTitle(`Targeted Intervention: ${res.concept_name}`);
+      }
+      setMessage('✨ AI drafted remediation explanation synthesized from student doubts and assessment gaps.');
+    } catch {
+      setMessage('Failed to generate AI explanation draft.');
+    } finally {
+      setDraftingPrimer(false);
+    }
+  };
+
   const loadReport = async (id: string) => {
     try {
       setReport(await apiClient.get<InterventionReport>(`/api/v1/courses/${offeringId}/interventions/${id}/report`));
@@ -239,11 +270,12 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
         </div>
       ) : rows.length ? (
         <div className="overflow-hidden rounded-2xl border border-[#DCE7EE] bg-white shadow-xs">
-          <div className="grid grid-cols-[minmax(0,2fr)_repeat(4,minmax(80px,1fr))] gap-3 border-b border-[#E8EFF3] bg-[#F8FAFC] px-5 py-3.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-            <span>Concept / sample</span>
-            <span>Accuracy</span>
-            <span>Assessed</span>
-            <span>Weakness</span>
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_minmax(90px,1fr)_minmax(110px,1fr)_minmax(100px,1fr)_minmax(80px,1fr)] gap-3 border-b border-[#E8EFF3] bg-[#F8FAFC] px-5 py-3.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            <span>Concept / Scope</span>
+            <span>Triangulated Risk</span>
+            <span>Quiz Accuracy</span>
+            <span>Practice Struggle</span>
+            <span>Student Doubts</span>
             <span>Misconceptions</span>
           </div>
           {rows.map((item) => {
@@ -251,7 +283,7 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
             return (
               <article
                 key={item.concept_id}
-                className="grid grid-cols-[minmax(0,2fr)_repeat(4,minmax(80px,1fr))] items-center gap-3 border-b border-[#E8EFF3] px-5 py-4 last:border-0 hover:bg-slate-50/50 transition-colors"
+                className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_minmax(90px,1fr)_minmax(110px,1fr)_minmax(100px,1fr)_minmax(80px,1fr)] items-center gap-3 border-b border-[#E8EFF3] px-5 py-4 last:border-0 hover:bg-slate-50/50 transition-colors"
               >
                 <div className="min-w-0 overflow-hidden">
                   <button
@@ -265,22 +297,57 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
                     {item.enrolled_count} enrolled · {item.insufficient_evidence_count} with insufficient evidence
                   </p>
                 </div>
-                <span className="text-sm font-semibold text-slate-800">
-                  {accuracy == null ? '—' : `${Math.round(accuracy * 100)}%`}
-                </span>
-                <span className="text-sm text-slate-600">
-                  {item.assessed_count}/{item.enrolled_count}
-                </span>
-                <span
-                  className={`inline-flex w-fit items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                    item.confirmed_weak_count
-                      ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  }`}
-                >
-                  {item.confirmed_weak_count > 0 && <TriangleAlert className="h-3.5 w-3.5" />}
-                  {item.confirmed_weak_count} confirmed
-                </span>
+
+                <div>
+                  {item.triangulated_risk_level === 'critical' ? (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                      <TriangleAlert className="h-3.5 w-3.5 text-rose-600" />
+                      Critical Risk
+                    </span>
+                  ) : item.triangulated_risk_level === 'moderate' ? (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                      <AlertCircle className="h-3.5 w-3.5 text-amber-600" />
+                      Moderate Risk
+                    </span>
+                  ) : item.triangulated_risk_level === 'healthy' ? (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      Healthy
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200">
+                      Insufficient Data
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <span className="text-sm font-semibold text-slate-800">
+                    {accuracy == null ? '—' : `${Math.round(accuracy * 100)}%`}
+                  </span>
+                  <span className="block text-[11px] text-slate-500">
+                    {item.assessed_count} assessed · {item.confirmed_weak_count} weak
+                  </span>
+                </div>
+
+                <div>
+                  <span className={`text-sm font-semibold ${item.practice_struggle_count > 0 ? 'text-amber-700' : 'text-slate-700'}`}>
+                    {item.practice_struggle_count} struggles
+                  </span>
+                  <span className="block text-[11px] text-slate-500">
+                    {item.practice_hints_used} hints · {item.practice_attempt_count} attempts
+                  </span>
+                </div>
+
+                <div>
+                  <span className={`text-sm font-semibold ${item.doubt_count > 0 ? 'text-indigo-700' : 'text-slate-700'}`}>
+                    {item.doubt_count} doubts
+                  </span>
+                  <span className="block text-[11px] text-slate-500">
+                    {item.doubt_unanswered_count > 0 ? `${item.doubt_unanswered_count} open` : 'all answered'}
+                  </span>
+                </div>
+
                 <span className="text-sm font-medium text-slate-700">{item.tagged_misconception_count}</span>
               </article>
             );
@@ -403,16 +470,29 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
                   ))}
               </select>
             </label>
-            <label className="text-xs font-semibold text-slate-700 md:col-span-2">
-              Phase B · Teacher-approved explanation
+            <div className="md:col-span-2">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label className="text-xs font-semibold text-slate-700">
+                  Phase B · Teacher-approved explanation
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void draftPrimerWithAI()}
+                  disabled={draftingPrimer || !activeConceptId}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700 hover:bg-purple-100 transition disabled:opacity-50 cursor-pointer"
+                >
+                  {draftingPrimer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-purple-600" />}
+                  ✨ Draft with AI (Doubts & Gaps)
+                </button>
+              </div>
               <textarea
                 value={primer}
                 onChange={(e) => setPrimer(e.target.value)}
-                rows={3}
-                className="mt-1.5 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
+                rows={5}
+                className="block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
                 placeholder="Write the explanation or link the approved material students should study."
               />
-            </label>
+            </div>
           </div>
 
           <p className="text-xs text-slate-500">

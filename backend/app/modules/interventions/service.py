@@ -29,6 +29,8 @@ from app.modules.interventions.schemas import (
     InterventionAssignmentOut,
     StudentInterventionViewOut,
     InterventionReportOut,
+    PrimerDraftRequest,
+    PrimerDraftResponse,
 )
 from app.modules.analytics.models import AnalyticsRun, StudentConceptEvidenceSnapshot
 from app.modules.analytics.service import AnalyticsService
@@ -709,4 +711,111 @@ class InterventionService:
             )
             for item in items
         ]
+
+    @staticmethod
+    async def generate_intervention_primer_draft(
+        db: AsyncSession,
+        tenant_id: uuid.UUID,
+        course_offering_id: uuid.UUID,
+        req: PrimerDraftRequest,
+    ) -> PrimerDraftResponse:
+        """
+        Synthesizes a targeted pedagogical intervention primer (Phase B explanation)
+        fusing teacher curriculum definitions, recorded student doubt inquiries, and
+        observed assessment misconceptions.
+        """
+        concept_stmt = (
+            select(Concept)
+            .options(selectinload(Concept.versions))
+            .where(
+                Concept.id == req.concept_id,
+                Concept.institution_id == tenant_id,
+            )
+        )
+        concept = (await db.execute(concept_stmt)).scalars().first()
+        if not concept:
+            raise AppException(status_code=404, code="CONCEPT_NOT_FOUND", message="Concept not found.")
+
+        # Gather recent doubts on this concept
+        from app.modules.doubts.models import Doubt
+        doubt_stmt = select(Doubt).where(
+            Doubt.course_offering_id == course_offering_id,
+            Doubt.concept_id == req.concept_id,
+            Doubt.status != "removed",
+        ).order_by(Doubt.created_at.desc()).limit(10)
+        doubts = (await db.execute(doubt_stmt)).scalars().all()
+
+        doubt_titles = [d.title for d in doubts if d.title]
+
+        # Gather observed misconceptions from assessment telemetry
+        from app.modules.analytics.models import MisconceptionEvent
+        from app.modules.questions.models import Misconception
+        misc_stmt = (
+            select(Misconception.code, Misconception.description, func.count(MisconceptionEvent.id).label("cnt"))
+            .join(MisconceptionEvent, Misconception.id == MisconceptionEvent.misconception_id)
+            .where(
+                MisconceptionEvent.course_offering_id == course_offering_id,
+                MisconceptionEvent.institution_id == tenant_id,
+                Misconception.concept_id == req.concept_id,
+            )
+            .group_by(Misconception.code, Misconception.description)
+            .order_by(func.count(MisconceptionEvent.id).desc())
+            .limit(5)
+        )
+        misc_rows = (await db.execute(misc_stmt)).all()
+        misconception_descs = [f"{r[0]}: {r[1]}" for r in misc_rows]
+
+        name = concept.canonical_name or "Target Concept"
+        latest_ver = concept.versions[0] if concept.versions else None
+        definition = (
+            latest_ver.definition
+            if latest_ver and latest_ver.definition
+            else "Fundamental principle in the course syllabus."
+        )
+
+        primer_lines = [
+            f"# Remediation Primer: {name}",
+            "",
+            "## 1. Core Principle & Intuition",
+            f"{definition}",
+            "",
+            "When approaching problems in this topic, remember the fundamental invariant:",
+            f"- Verify state transitions and edge boundary conditions for `{name}`.",
+            "- Avoid premature optimization before verifying core correctness.",
+            "",
+        ]
+
+        if misconception_descs:
+            primer_lines.append("## 2. Common Pitfalls & Misconceptions Detected in Quizzes")
+            for m in misconception_descs:
+                primer_lines.append(f"- ⚠️ **{m}**")
+            primer_lines.append("")
+
+        if doubt_titles:
+            primer_lines.append("## 3. Addressing Student Inquiries & Confusion Spikes")
+            primer_lines.append("Students in this cohort recently inquired about:")
+            for dt in doubt_titles[:4]:
+                primer_lines.append(f"- *\"{dt}\"*")
+            primer_lines.append("")
+            primer_lines.append("**Key Takeaway**: Maintain clear distinction between high-level conceptual guarantees and implementation edge cases. Work through the base transitions systematically.")
+            primer_lines.append("")
+
+        primer_lines.extend([
+            "## 4. Guided Checklist Before Moving to Practice Items",
+            "1. Read the problem statement and identify the governing constraints.",
+            "2. State the base cases and preconditions explicitly.",
+            "3. Verify that your solution terminates on all valid sub-problem instances.",
+            "4. Complete the targeted practice exercises below to demonstrate mastery.",
+        ])
+
+        primer_text = "\n".join(primer_lines)
+
+        return PrimerDraftResponse(
+            concept_id=concept.id,
+            concept_name=name,
+            primer_draft=primer_text,
+            detected_misconceptions=misconception_descs,
+            key_doubt_themes=doubt_titles[:5],
+            recommended_reading=f"Course syllabus node: {name}",
+        )
 

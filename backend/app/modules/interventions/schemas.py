@@ -128,3 +128,17 @@ class InterventionReportOut(BaseModel):
     )
     assignments: List[InterventionAssignmentOut] = []
 
+
+class PrimerDraftRequest(BaseModel):
+    concept_id: uuid.UUID
+    target_notes: Optional[str] = None
+
+
+class PrimerDraftResponse(BaseModel):
+    concept_id: uuid.UUID
+    concept_name: str
+    primer_draft: str
+    detected_misconceptions: List[str] = []
+    key_doubt_themes: List[str] = []
+    recommended_reading: Optional[str] = None
+

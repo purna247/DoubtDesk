@@ -19,6 +19,8 @@ from app.modules.interventions.schemas import (
     StudentInterventionViewOut,
     InterventionReportOut,
     StudentInterventionListOut,
+    PrimerDraftRequest,
+    PrimerDraftResponse,
 )
 
 router = APIRouter(prefix="/courses/{course_offering_id}/interventions", tags=["Targeted Interventions"])
@@ -28,6 +30,29 @@ def _get_tenant_id(user: UserProfile) -> uuid.UUID:
     if not user.institution_id:
         raise AppException(code="NO_TENANT_CONTEXT", message="Institution context required.", status_code=400)
     return uuid.UUID(user.institution_id)
+
+
+@router.post("/draft-primer", response_model=PrimerDraftResponse)
+async def draft_intervention_primer(
+    course_offering_id: uuid.UUID,
+    req: PrimerDraftRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_teacher),
+) -> PrimerDraftResponse:
+    """
+    Teacher calls AI assistant to draft a targeted Phase B intervention primer
+    addressing recorded cohort doubts and assessment misconceptions.
+    """
+    tenant_id = _get_tenant_id(current_user)
+    await InterventionService.verify_teacher_course_access(
+        db, tenant_id, course_offering_id, current_user
+    )
+    return await InterventionService.generate_intervention_primer_draft(
+        db=db,
+        tenant_id=tenant_id,
+        course_offering_id=course_offering_id,
+        req=req,
+    )
 
 
 @router.get("", response_model=List[InterventionOut])
