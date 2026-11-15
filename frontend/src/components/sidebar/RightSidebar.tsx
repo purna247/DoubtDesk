@@ -29,6 +29,13 @@ export interface MyDoubtStats {
   overall: InfluencePeriodStats;
 }
 
+export interface TeacherDoubtSummary {
+  unansweredCount: number;
+  pendingVerificationCount: number;
+  verifiedCount: number;
+  totalCount: number;
+}
+
 interface RightSidebarProps {
   role?: string | null;
   teacherOfferings?: CourseOffering[];
@@ -40,6 +47,9 @@ interface RightSidebarProps {
   avatarUrl?: string | null;
   stats?: MyDoubtStats | null;
   isLoadingStats?: boolean;
+  teacherDoubtSummary?: TeacherDoubtSummary;
+  activeFilterMode?: string;
+  onSelectDoubtFilter?: (filter: string) => void;
 }
 
 const formatDoubtCount = (count: number) => `${count} ${count === 1 ? 'doubt' : 'doubts'}`;
@@ -76,6 +86,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   avatarUrl,
   stats,
   isLoadingStats = false,
+  teacherDoubtSummary,
+  activeFilterMode,
+  onSelectDoubtFilter,
 }) => {
   const [influencePeriod, setInfluencePeriod] = useState<'7days' | 'overall'>('7days');
   const activeStats = influencePeriod === '7days' ? stats?.last_7_days : stats?.overall;
@@ -84,13 +97,17 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   const progressDashOffset = Math.max(0, 170 - Math.min(100, (answeredCount + askedCount) * 10) * 1.7);
 
   if (role === 'TEACHER') {
+    const unanswered = teacherDoubtSummary?.unansweredCount ?? 0;
+    const pendingVer = teacherDoubtSummary?.pendingVerificationCount ?? 0;
+    const verified = teacherDoubtSummary?.verifiedCount ?? 0;
+    const total = teacherDoubtSummary?.totalCount ?? 0;
+    const totalPending = unanswered + pendingVer;
+
     return (
-      <aside className="w-[290px] xl:w-[320px] 2xl:w-[340px] shrink-0 hidden lg:flex flex-col gap-5 sticky top-6">
-        <div className="sidebar-card border border-[#DCE7EE] rounded-[16px] bg-white p-5 shadow-xs">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5]">
-            Faculty Workspace
-          </p>
-          <div className="mt-3 flex items-center gap-3">
+      <aside className="w-[290px] xl:w-[320px] 2xl:w-[340px] shrink-0 hidden lg:flex flex-col gap-4 sticky top-6">
+        {/* 1. Faculty Profile Card */}
+        <div className="sidebar-card border border-[#DCE7EE] rounded-[16px] bg-white p-4 sm:p-5 shadow-xs">
+          <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-full bg-[#0F172A] text-white flex items-center justify-center font-bold text-sm tracking-wide shrink-0 overflow-hidden">
               {avatarUrl ? (
                 <img src={avatarUrl} alt={facultyName} className="w-full h-full object-cover" />
@@ -99,27 +116,130 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="text-base font-bold text-[#111111] leading-tight truncate">
+              <h3 className="text-sm font-bold text-[#111111] leading-tight truncate">
                 {facultyName}
               </h3>
-              <p className="text-xs text-[#71808C] mt-0.5 font-medium">Faculty</p>
+              <p className="text-xs text-[#71808C] mt-0.5 font-medium">Faculty Member</p>
             </div>
           </div>
+        </div>
 
-          <div className="h-[1px] bg-[#E8EFF3] my-4" />
+        {/* 2. Doubts Pending Review / Answer / Verify Card */}
+        <div className="sidebar-card border border-[#DCE7EE] rounded-[16px] bg-white p-4 sm:p-5 shadow-xs">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-[#0A8FF5] flex items-center gap-1.5">
+              <HelpCircle className="w-3.5 h-3.5" />
+              Doubt Review Queue
+            </p>
+            {totalPending > 0 ? (
+              <span className="rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 text-[10px] font-bold">
+                {totalPending} Pending
+              </span>
+            ) : (
+              <span className="rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-[10px] font-bold">
+                All Cleared
+              </span>
+            )}
+          </div>
 
-          <p className="text-[11px] font-bold uppercase tracking-wide text-[#0A8FF5] mb-2.5">
-            Assigned courses
+          <div className="space-y-2">
+            {/* Unanswered doubts */}
+            <button
+              type="button"
+              onClick={() => onSelectDoubtFilter?.('unanswered')}
+              className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                activeFilterMode === 'unanswered'
+                  ? 'bg-[#EAF5FF] border-[#B8D9F5]'
+                  : 'bg-[#F8FAFC] border-[#E8EFF3] hover:bg-slate-100'
+              }`}
+              title="Click to view doubts needing an answer"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-xs">
+                  {unanswered}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-[#111111]">Unanswered Doubts</p>
+                  <p className="text-[10px] text-[#71808C]">Awaiting faculty or peer answer</p>
+                </div>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-[#71808C]" />
+            </button>
+
+            {/* Pending Verification */}
+            <button
+              type="button"
+              onClick={() => onSelectDoubtFilter?.('needs_verification')}
+              className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                activeFilterMode === 'needs_verification'
+                  ? 'bg-[#EAF5FF] border-[#B8D9F5]'
+                  : 'bg-[#F8FAFC] border-[#E8EFF3] hover:bg-slate-100'
+              }`}
+              title="Click to view answers awaiting teacher verification"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-xs">
+                  {pendingVer}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-[#111111]">Pending Verification</p>
+                  <p className="text-[10px] text-[#71808C]">Answers waiting for faculty check</p>
+                </div>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-[#71808C]" />
+            </button>
+
+            {/* Verified Answers */}
+            <button
+              type="button"
+              onClick={() => onSelectDoubtFilter?.('verified')}
+              className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                activeFilterMode === 'verified'
+                  ? 'bg-[#EAF5FF] border-[#B8D9F5]'
+                  : 'bg-[#F8FAFC] border-[#E8EFF3] hover:bg-slate-100'
+              }`}
+              title="Click to view verified answers"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">
+                  {verified}
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-[#111111]">Faculty Verified</p>
+                  <p className="text-[10px] text-[#71808C]">Approved solutions</p>
+                </div>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-[#71808C]" />
+            </button>
+          </div>
+
+          {/* Quick reset / view all button */}
+          <button
+            type="button"
+            onClick={() => onSelectDoubtFilter?.('all')}
+            className={`mt-3 w-full text-center py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeFilterMode === 'all'
+                ? 'bg-slate-200 text-slate-800'
+                : 'text-[#0A8FF5] hover:bg-[#EAF5FF]'
+            }`}
+          >
+            View All Doubts ({total})
+          </button>
+        </div>
+
+        {/* 3. Assigned Courses Card */}
+        <div className="sidebar-card border border-[#DCE7EE] rounded-[16px] bg-white p-4 sm:p-5 shadow-xs">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-[#71808C] mb-2.5">
+            Assigned Courses ({teacherOfferings.length})
           </p>
-
           {teacherOfferings.length > 0 ? (
-            <ul className="space-y-3">
+            <ul className="space-y-2.5">
               {teacherOfferings.map((offering) => (
-                <li key={offering.id} className="border-b border-[#DCE7EE] pb-3 last:border-0 last:pb-0">
-                  <p className="text-sm font-semibold text-[#111111] leading-snug">
+                <li key={offering.id} className="border-b border-[#F1F5F9] pb-2 last:border-0 last:pb-0">
+                  <p className="text-xs font-semibold text-[#111111] leading-snug">
                     {offering.subject_name || offering.official_subject_code || 'Assigned course'}
                   </p>
-                  <p className="mt-0.5 text-xs text-[#71808C]">
+                  <p className="mt-0.5 text-[11px] text-[#71808C]">
                     {[offering.official_subject_code, offering.section_code && `Sec ${offering.section_code}`, offering.term_code].filter(Boolean).join(' · ')}
                   </p>
                 </li>

@@ -41,6 +41,7 @@ export const FeedFilters: React.FC<FeedFiltersProps> = ({
           >
             <option value="all">All questions</option>
             <option value="unanswered">Unanswered</option>
+            <option value="needs_verification">Pending Verification</option>
             <option value="verified">Verified by Teacher</option>
             <option value="bookmarked">Saved / Bookmarked</option>
           </select>

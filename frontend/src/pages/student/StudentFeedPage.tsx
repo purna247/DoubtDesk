@@ -307,6 +307,9 @@ export const StudentFeedPage: React.FC = () => {
         if (filterMode === 'unanswered') {
           return d.answers.length === 0;
         }
+        if (filterMode === 'needs_verification') {
+          return d.answers.length > 0 && !d.answers.some((a) => a.isVerifiedByTeacher);
+        }
         if (filterMode === 'bookmarked') {
           return d.isBookmarked === true;
         }
@@ -328,6 +331,20 @@ export const StudentFeedPage: React.FC = () => {
         return 0;
       });
   }, [doubts, searchQuery, selectedSubject, enrolledSubjects, filterMode, sortBy]);
+
+  const teacherDoubtSummary = useMemo(() => {
+    const unansweredCount = doubts.filter((d) => d.answers.length === 0).length;
+    const pendingVerificationCount = doubts.filter(
+      (d) => d.answers.length > 0 && !d.answers.some((a) => a.isVerifiedByTeacher)
+    ).length;
+    const verifiedCount = doubts.filter((d) => d.answers.some((a) => a.isVerifiedByTeacher)).length;
+    return {
+      unansweredCount,
+      pendingVerificationCount,
+      verifiedCount,
+      totalCount: doubts.length,
+    };
+  }, [doubts]);
 
   const handleAddNewDoubt = async (doubtData: AskDoubtSubmission) => {
     try {
@@ -618,6 +635,13 @@ export const StudentFeedPage: React.FC = () => {
                 avatarUrl={user?.avatar_url || user?.avatarUrl}
                 stats={myStats}
                 isLoadingStats={isStatsLoading}
+                teacherDoubtSummary={teacherDoubtSummary}
+                activeFilterMode={filterMode}
+                onSelectDoubtFilter={(mode) => {
+                  setFilterMode(mode);
+                  setViewMode('feed');
+                  setActiveDoubtId(null);
+                }}
                 onOpenProfile={handleOpenProfile}
                 onSelectContributor={(name) => {
                   setSearchQuery(name);
