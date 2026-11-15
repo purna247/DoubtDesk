@@ -1001,7 +1001,28 @@ class AdaptivePracticeService:
         is_correct = bool(eval_res.is_correct)
         ans_key = act_v.answer_key_json or {}
         correct_option_id = ans_key.get("correct_option_id")
-        explanation = str(ans_key.get("explanation") or eval_res.feedback or "Review this concept and try the next step.")
+
+        # Robustly resolve explanation across all activity types without crashing on missing attributes
+        explanation = ans_key.get("explanation")
+        if not explanation and "blanks" in ans_key:
+            for b_info in (ans_key.get("blanks") or {}).values():
+                if isinstance(b_info, dict) and b_info.get("explanation"):
+                    explanation = b_info["explanation"]
+                    break
+        if not explanation and isinstance(eval_res.details, dict):
+            explanation = eval_res.details.get("feedback")
+        if not explanation:
+            explanation = (act_v.scoring_config_json or {}).get("explanation") or "Review this concept and try the next step."
+
+        if not is_correct and not correct_option_id and "blanks" in ans_key:
+            accepted_answers = []
+            for b_info in (ans_key.get("blanks") or {}).values():
+                if isinstance(b_info, dict) and b_info.get("accepted_answers"):
+                    accepted_answers.extend([str(a) for a in b_info["accepted_answers"] if a])
+            if accepted_answers and not any(a.lower() in str(explanation).lower() for a in accepted_answers):
+                explanation = f"Accepted answer: {accepted_answers[0]}.\n\n{explanation}"
+
+        explanation = str(explanation)
         citation = ans_key.get("citation") or (act_v.scoring_config_json or {}).get("citation")
         if citation and citation not in explanation:
             explanation = f"{explanation}\n\n📖 Reference: {citation}"
@@ -1127,6 +1148,7 @@ class AdaptivePracticeService:
             correct_option_id=str(correct_option_id) if correct_option_id else None,
             explanation=explanation,
             feedback_summary=feedback_summary,
+            citation=citation,
             node_completed=node_completed,
             session=_build_session_state_out(session),
             next_question=_to_practice_question_out(next_v) if (next_v and not node_completed) else None,
