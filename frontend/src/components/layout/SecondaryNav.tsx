@@ -14,7 +14,6 @@ export const SecondaryNav: React.FC<SecondaryNavProps> = ({ activeTab, onSelectT
     { id: 'pyq', label: 'PYQ' },
     { id: 'studymaterial', label: 'Study Material' },
     ...(role === 'TEACHER' ? [
-      { id: 'teacher_doubts', label: 'Course Doubts' },
       { id: 'teacher_analytics', label: 'Analytics' },
     ] : []),
   ];

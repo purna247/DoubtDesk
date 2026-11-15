@@ -16,7 +16,6 @@ import { QuizView } from '../../components/academic/QuizView';
 import { PYQView } from '../../components/academic/PYQView';
 import { StudyMaterialView } from '../../components/academic/StudyMaterialView';
 import { TeacherMaterialsPage } from '../teacher/TeacherMaterialsPage';
-import { TeacherDoubtReviewTab } from '../teacher/TeacherDoubtReviewTab';
 import { TeacherAnalyticsPage } from '../teacher/TeacherAnalyticsPage';
 import { TeacherLearnWorkspace } from '../teacher/TeacherLearnWorkspace';
 import type { EnrolledSubjectItem } from '../../components/layout/DesktopSidebar';
@@ -86,7 +85,6 @@ const ROUTE_BY_TAB: Record<string, string> = {
   quiz: '/quiz',
   pyq: '/pyq',
   studymaterial: '/materials',
-  teacher_doubts: '/course-doubts',
   teacher_analytics: '/analytics',
 };
 
@@ -96,7 +94,6 @@ const TAB_BY_ROUTE: Record<string, string> = {
   '/quiz': 'quiz',
   '/pyq': 'pyq',
   '/materials': 'studymaterial',
-  '/course-doubts': 'teacher_doubts',
   '/analytics': 'teacher_analytics',
 };
 
@@ -539,8 +536,6 @@ export const StudentFeedPage: React.FC = () => {
                     offerings={studentOfferings}
                   />
                 )
-              ) : activeNavTab === 'teacher_doubts' ? (
-                <TeacherDoubtReviewTab />
               ) : activeNavTab === 'teacher_analytics' ? (
                 <TeacherAnalyticsPage offerings={teacherOfferings} />
               ) : (
