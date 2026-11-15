@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
-from sqlalchemy import select, and_, func, or_
+from sqlalchemy import select, and_, func, or_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -370,6 +370,21 @@ class AnalyticsService:
         for ac in ass_concepts:
             concept_map[ac.id] = ac
 
+        # Also include concepts with student doubts in this course offering
+        from app.modules.doubts.models import Doubt
+        doubt_c_stmt = (
+            select(Concept)
+            .join(Doubt, Doubt.concept_id == Concept.id)
+            .where(
+                Doubt.course_offering_id == course_offering_id,
+                Doubt.institution_id == tenant_id,
+            )
+            .distinct()
+        )
+        doubt_concepts = (await db.execute(doubt_c_stmt)).scalars().all()
+        for dc in doubt_concepts:
+            concept_map[dc.id] = dc
+
         all_concepts = list(concept_map.values())
 
         # 3. Retrieve all valid submitted and scored attempts for assessments in this offering
@@ -590,6 +605,123 @@ class AnalyticsService:
         return run
 
     @staticmethod
+    async def _compute_triangulated_evidence(
+        db: AsyncSession,
+        course_offering_id: uuid.UUID,
+        concept_ids: List[uuid.UUID],
+    ) -> Dict[uuid.UUID, Dict[str, Any]]:
+        """
+        Fuses Learn Practice telemetry and Doubt inquiry volume for each concept.
+        """
+        results: Dict[uuid.UUID, Dict[str, Any]] = {
+            cid: {
+                "practice_attempt_count": 0,
+                "practice_struggle_count": 0,
+                "practice_hints_used": 0,
+                "doubt_count": 0,
+                "doubt_unanswered_count": 0,
+            }
+            for cid in concept_ids
+        }
+        if not concept_ids:
+            return results
+
+        # 1. Practice Sessions (Learn Tab)
+        from app.modules.learning.models import StudentPracticeSession, LearningNode, LearningNodeConcept
+        try:
+            learn_stmt = (
+                select(
+                    LearningNodeConcept.concept_id,
+                    func.sum(StudentPracticeSession.questions_answered).label("attempts"),
+                    func.sum(StudentPracticeSession.hints_used).label("hints"),
+                    func.sum(
+                        case(
+                            (or_(StudentPracticeSession.mistake_count > 0, StudentPracticeSession.easier_followups_triggered > 0), 1),
+                            else_=0,
+                        )
+                    ).label("struggles"),
+                )
+                .join(LearningNode, StudentPracticeSession.learning_node_id == LearningNode.id)
+                .join(LearningNodeConcept, LearningNode.id == LearningNodeConcept.learning_node_id)
+                .where(
+                    StudentPracticeSession.course_offering_id == course_offering_id,
+                    LearningNodeConcept.concept_id.in_(concept_ids),
+                )
+                .group_by(LearningNodeConcept.concept_id)
+            )
+            learn_rows = (await db.execute(learn_stmt)).all()
+            for r in learn_rows:
+                cid = r[0]
+                if cid in results:
+                    results[cid]["practice_attempt_count"] = int(r[1] or 0)
+                    results[cid]["practice_hints_used"] = int(r[2] or 0)
+                    results[cid]["practice_struggle_count"] = int(r[3] or 0)
+        except Exception:
+            pass
+
+        # 2. Doubts (Doubts Tab)
+        from app.modules.doubts.models import Doubt
+        try:
+            doubt_stmt = (
+                select(
+                    Doubt.concept_id,
+                    func.count(Doubt.id).label("total_doubts"),
+                    func.sum(case((Doubt.answer_count == 0, 1), else_=0)).label("unanswered_doubts"),
+                )
+                .where(
+                    Doubt.course_offering_id == course_offering_id,
+                    Doubt.concept_id.in_(concept_ids),
+                    Doubt.status != "removed",
+                )
+                .group_by(Doubt.concept_id)
+            )
+            doubt_rows = (await db.execute(doubt_stmt)).all()
+            for r in doubt_rows:
+                cid = r[0]
+                if cid in results:
+                    results[cid]["doubt_count"] = int(r[1] or 0)
+                    results[cid]["doubt_unanswered_count"] = int(r[2] or 0)
+        except Exception:
+            pass
+
+        return results
+
+    @staticmethod
+    def _calculate_triangulated_risk(
+        assessed_count: int,
+        confirmed_weak_count: int,
+        candidate_weak_count: int,
+        cohort_mean_accuracy: Optional[float],
+        practice_attempt_count: int,
+        practice_struggle_count: int,
+        doubt_count: int,
+    ) -> str:
+        if assessed_count == 0 and practice_attempt_count == 0 and doubt_count == 0:
+            return "insufficient_evidence"
+
+        is_quiz_weak = confirmed_weak_count > 0 or (
+            cohort_mean_accuracy is not None and cohort_mean_accuracy < 0.6
+        )
+        has_practice_struggle = practice_struggle_count > 0
+        has_doubts = doubt_count > 0
+
+        # Critical: Quiz failure corroborated by practice struggle or student doubts
+        if is_quiz_weak and (has_practice_struggle or has_doubts):
+            return "critical"
+
+        # Moderate: Weak in any single channel or moderate quiz concern
+        if (
+            is_quiz_weak
+            or candidate_weak_count > 0
+            or (cohort_mean_accuracy is not None and cohort_mean_accuracy < 0.75)
+            or practice_struggle_count >= 2
+            or doubt_count >= 2
+        ):
+            return "moderate"
+
+        return "healthy"
+
+    @staticmethod
     async def get_cohort_concept_analytics(
         db: AsyncSession,
         tenant_id: uuid.UUID,
@@ -612,26 +744,58 @@ class AnalyticsService:
             )
         )
         items = (await db.execute(cohort_stmt)).scalars().all()
-        results = [
-            CohortConceptAnalyticsOut(
-                concept_id=item.concept_id,
-                concept_code=item.concept.concept_code if item.concept else None,
-                concept_name=item.concept.canonical_name if item.concept else None,
-                enrolled_count=item.enrolled_count,
+        concept_ids = [item.concept_id for item in items]
+        tri_evidence = await AnalyticsService._compute_triangulated_evidence(
+            db, course_offering_id, concept_ids
+        )
+
+        results = []
+        for item in items:
+            cid = item.concept_id
+            ev = tri_evidence.get(cid, {})
+            prac_attempts = ev.get("practice_attempt_count", 0)
+            prac_struggles = ev.get("practice_struggle_count", 0)
+            prac_hints = ev.get("practice_hints_used", 0)
+            d_count = ev.get("doubt_count", 0)
+            d_unans = ev.get("doubt_unanswered_count", 0)
+
+            risk_level = AnalyticsService._calculate_triangulated_risk(
                 assessed_count=item.assessed_count,
                 confirmed_weak_count=item.confirmed_weak_count,
                 candidate_weak_count=item.candidate_weak_count,
-                insufficient_evidence_count=item.insufficient_evidence_count,
                 cohort_mean_accuracy=item.cohort_mean_accuracy,
-                cohort_pooled_accuracy=item.cohort_pooled_accuracy,
-                tagged_misconception_count=item.tagged_misconception_count,
-                computed_at=item.computed_at,
+                practice_attempt_count=prac_attempts,
+                practice_struggle_count=prac_struggles,
+                doubt_count=d_count,
             )
-            for item in items
-        ]
+
+            results.append(
+                CohortConceptAnalyticsOut(
+                    concept_id=item.concept_id,
+                    concept_code=item.concept.concept_code if item.concept else None,
+                    concept_name=item.concept.canonical_name if item.concept else None,
+                    enrolled_count=item.enrolled_count,
+                    assessed_count=item.assessed_count,
+                    confirmed_weak_count=item.confirmed_weak_count,
+                    candidate_weak_count=item.candidate_weak_count,
+                    insufficient_evidence_count=item.insufficient_evidence_count,
+                    cohort_mean_accuracy=item.cohort_mean_accuracy,
+                    cohort_pooled_accuracy=item.cohort_pooled_accuracy,
+                    tagged_misconception_count=item.tagged_misconception_count,
+                    practice_attempt_count=prac_attempts,
+                    practice_struggle_count=prac_struggles,
+                    practice_hints_used=prac_hints,
+                    doubt_count=d_count,
+                    doubt_unanswered_count=d_unans,
+                    triangulated_risk_level=risk_level,
+                    computed_at=item.computed_at,
+                )
+            )
+
         results.sort(
             key=lambda row: (
-                0 if row.assessed_count > 0 else 1,
+                0 if row.assessed_count > 0 or row.practice_attempt_count > 0 else 1,
+                0 if row.triangulated_risk_level == "critical" else (1 if row.triangulated_risk_level == "moderate" else 2),
                 -row.confirmed_weak_count,
                 -row.candidate_weak_count,
                 (row.concept_name or "").lower(),
@@ -669,6 +833,26 @@ class AnalyticsService:
         if not cohort_rec:
             raise AppException(status_code=404, code="CONCEPT_NOT_FOUND", message="Concept not found in course analytics.")
 
+        tri_map = await AnalyticsService._compute_triangulated_evidence(
+            db, course_offering_id, [concept_id]
+        )
+        ev = tri_map.get(concept_id, {})
+        prac_attempts = ev.get("practice_attempt_count", 0)
+        prac_struggles = ev.get("practice_struggle_count", 0)
+        prac_hints = ev.get("practice_hints_used", 0)
+        d_count = ev.get("doubt_count", 0)
+        d_unans = ev.get("doubt_unanswered_count", 0)
+
+        risk_level = AnalyticsService._calculate_triangulated_risk(
+            assessed_count=cohort_rec.assessed_count,
+            confirmed_weak_count=cohort_rec.confirmed_weak_count,
+            candidate_weak_count=cohort_rec.candidate_weak_count,
+            cohort_mean_accuracy=cohort_rec.cohort_mean_accuracy,
+            practice_attempt_count=prac_attempts,
+            practice_struggle_count=prac_struggles,
+            doubt_count=d_count,
+        )
+
         cohort_out = CohortConceptAnalyticsOut(
             concept_id=cohort_rec.concept_id,
             concept_code=cohort_rec.concept.concept_code if cohort_rec.concept else None,
@@ -681,6 +865,12 @@ class AnalyticsService:
             cohort_mean_accuracy=cohort_rec.cohort_mean_accuracy,
             cohort_pooled_accuracy=cohort_rec.cohort_pooled_accuracy,
             tagged_misconception_count=cohort_rec.tagged_misconception_count,
+            practice_attempt_count=prac_attempts,
+            practice_struggle_count=prac_struggles,
+            practice_hints_used=prac_hints,
+            doubt_count=d_count,
+            doubt_unanswered_count=d_unans,
+            triangulated_risk_level=risk_level,
             computed_at=cohort_rec.computed_at,
         )
 

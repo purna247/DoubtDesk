@@ -62,6 +62,12 @@ class CohortConceptAnalyticsOut(BaseModel):
     cohort_mean_accuracy: Optional[float] = None
     cohort_pooled_accuracy: Optional[float] = None
     tagged_misconception_count: int
+    practice_attempt_count: int = 0
+    practice_struggle_count: int = 0
+    practice_hints_used: int = 0
+    doubt_count: int = 0
+    doubt_unanswered_count: int = 0
+    triangulated_risk_level: str = "healthy"
     computed_at: datetime
 
 
