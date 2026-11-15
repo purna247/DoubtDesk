@@ -5,6 +5,7 @@ from sqlalchemy import String, Text, Boolean, Integer, DateTime, ForeignKey, Uni
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
+import app.modules.institutions.models  # noqa: F401
 
 
 class User(Base):
