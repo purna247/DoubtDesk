@@ -100,6 +100,30 @@ async def create_doubt(
     )
 
 
+@router.post("/doubts/{doubt_id}/classify", response_model=DoubtOut)
+async def classify_doubt(
+    doubt_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
+):
+    """
+    Manually trigger or refresh semantic classification for a doubt thread.
+    """
+    tenant_id = _get_tenant_id(current_user)
+    role = _get_user_role(current_user)
+    from app.modules.doubts.semantic_service import DoubtSemanticService
+    doubt = await DoubtSemanticService.classify_and_tag_doubt(db, doubt_id)
+    if not doubt:
+        raise AppException(status_code=404, code="DOUBT_NOT_FOUND", message="Doubt not found.")
+    return await DoubtService.get_doubt_detail(
+        db=db,
+        tenant_id=tenant_id,
+        doubt_id=doubt_id,
+        caller_user_id=uuid.UUID(current_user.id),
+        caller_role=role,
+    )
+
+
 # --- Moderation Queue & Flag Inspection (Admin Only) ---
 
 @router.get("/doubts/moderation/flags", response_model=List[DoubtFlagOut])

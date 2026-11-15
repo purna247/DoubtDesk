@@ -265,6 +265,15 @@ class DoubtService:
         db.add(doubt)
         await db.commit()
         await db.refresh(doubt)
+
+        # Run semantic classification pipeline to extract topics & misconceptions
+        try:
+            from app.modules.doubts.semantic_service import DoubtSemanticService
+            await DoubtSemanticService.classify_and_tag_doubt(db, doubt.id)
+            await db.refresh(doubt)
+        except Exception:
+            pass
+
         return doubt
 
     @staticmethod
