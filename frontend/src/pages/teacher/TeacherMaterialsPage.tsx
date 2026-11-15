@@ -191,12 +191,6 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
 
   return (
     <div className="space-y-5">
-      <header>
-        <p className="text-xs font-bold uppercase tracking-wide text-[#0A8FF5]">Faculty course studio</p>
-        <h1 className="mt-1 text-xl sm:text-2xl font-bold text-[#111111]">Course materials</h1>
-        <p className="mt-1 text-sm text-[#71808C]">Upload once and continue teaching. Successfully processed materials appear for enrolled students automatically.</p>
-      </header>
-
       <div className="space-y-5 min-w-0">
         <div className="space-y-5 min-w-0">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
