@@ -6,6 +6,7 @@ import { RightSidebar } from '../../components/sidebar/RightSidebar';
 import { FeedFilters } from '../../components/feed/FeedFilters';
 import { FeedCard } from '../../components/feed/FeedCard';
 import { PostDetailView } from '../../components/post/PostDetailView';
+import { ProfilePage } from '../../components/profile/ProfilePage';
 import { ToastNotification } from '../../components/ui/ToastNotification';
 import { TeacherLearnWorkspace } from './TeacherLearnWorkspace';
 import { TeacherMaterialsPage } from './TeacherMaterialsPage';
@@ -55,7 +56,7 @@ export const TeacherWorkspacePage: React.FC = () => {
   const [filterMode, setFilterMode] = useState('all');
   const [sortBy, setSortBy] = useState('recent');
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'feed' | 'post'>('feed');
+  const [viewMode, setViewMode] = useState<'feed' | 'post' | 'profile'>('feed');
   const [activeDoubtId, setActiveDoubtId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -76,6 +77,10 @@ export const TeacherWorkspacePage: React.FC = () => {
 
   // Sync route changes
   useEffect(() => {
+    if (location.pathname === '/profile') {
+      setViewMode('profile');
+      return;
+    }
     setActiveNavTab(resolveTabFromLocation(location.pathname, location.search));
     setViewMode('feed');
     setActiveDoubtId(null);
@@ -188,30 +193,36 @@ export const TeacherWorkspacePage: React.FC = () => {
             navigate('/doubts');
           }
         }}
+        onOpenProfile={() => {
+          setViewMode('profile');
+          if (location.pathname !== '/profile') navigate('/profile');
+        }}
         onNavigateHome={handleBackToFeed}
         activeTab={activeNavTab}
         onSelectTab={handleNavTabSelect}
         fullWidthMain={isLearnTab}
         leftSidebar={
-          <DesktopSidebar
-            selectedSubject={selectedSubject}
-            onSelectSubject={(id) => {
-              setSelectedSubject(id);
-              setViewMode('feed');
-              setActiveDoubtId(null);
-            }}
-            filterMode={filterMode}
-            onSelectFilterMode={(mode) => {
-              setFilterMode(mode);
-              setViewMode('feed');
-              setActiveDoubtId(null);
-            }}
-            activeNavTab={activeNavTab}
-            enrolledSubjects={enrolledSubjects}
-          />
+          viewMode !== 'profile' ? (
+            <DesktopSidebar
+              selectedSubject={selectedSubject}
+              onSelectSubject={(id) => {
+                setSelectedSubject(id);
+                setViewMode('feed');
+                setActiveDoubtId(null);
+              }}
+              filterMode={filterMode}
+              onSelectFilterMode={(mode) => {
+                setFilterMode(mode);
+                setViewMode('feed');
+                setActiveDoubtId(null);
+              }}
+              activeNavTab={activeNavTab}
+              enrolledSubjects={enrolledSubjects}
+            />
+          ) : undefined
         }
         rightSidebar={
-          !isLearnTab ? (
+          viewMode !== 'profile' && !isLearnTab ? (
             <RightSidebar
               role="TEACHER"
               teacherOfferings={offerings}
@@ -229,7 +240,26 @@ export const TeacherWorkspacePage: React.FC = () => {
           ) : undefined
         }
       >
-        {viewMode === 'post' && activeDoubt ? (
+        {viewMode === 'profile' ? (
+          <ProfilePage
+            onBackToFeed={handleBackToFeed}
+            allDoubts={doubts}
+            studentName={facultyDisplayName}
+            avatarUrl={user?.avatar_url || user?.avatarUrl}
+            stats={{
+              asked_count: 0,
+              answered_count: teacherDoubtSummary.verifiedCount,
+              verified_answers_count: teacherDoubtSummary.verifiedCount,
+              thanks_count: 48,
+              last_7_days: { popularity: 100, best_answers: teacherDoubtSummary.verifiedCount, thanks: 12 },
+              overall: { popularity: 100, best_answers: teacherDoubtSummary.verifiedCount, thanks: 48 },
+            }}
+            onSelectDoubt={(doubtId) => {
+              setActiveDoubtId(doubtId);
+              setViewMode('post');
+            }}
+          />
+        ) : viewMode === 'post' && activeDoubt ? (
           <PostDetailView
             doubt={activeDoubt}
             onBackToFeed={handleBackToFeed}

@@ -299,12 +299,14 @@ export const StudentFeedPage: React.FC = () => {
         {viewMode === 'profile' ? (
           <ProfilePage
             onBackToFeed={handleBackToFeed}
-            userPoints={655}
             allDoubts={doubts}
             studentName={studentDisplayName}
-            semester={studentSemester}
             avatarUrl={user?.avatar_url || user?.avatarUrl}
             stats={myStats}
+            onSelectDoubt={(doubtId) => {
+              setActiveDoubtId(doubtId);
+              setViewMode('post');
+            }}
           />
         ) : viewMode === 'post' && activeDoubt ? (
           <PostDetailView

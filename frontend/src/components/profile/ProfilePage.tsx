@@ -1,464 +1,501 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  Shield,
-  Pencil,
-  Trophy,
   ArrowLeft,
-  Crown,
-  Grid,
-  Cpu,
-  BookOpen,
-  Sparkles
+  MessageSquare,
+  CheckCircle2,
+  ThumbsUp,
+  Bookmark,
+  School,
+  GraduationCap,
+  ShieldCheck,
+  Mail,
+  Pencil,
+  Check,
+  HelpCircle,
+  Clock,
+  ChevronRight,
 } from 'lucide-react';
-import { DoubtItem } from '../../data/doubtsData';
+import { useAuth } from '../../contexts/AuthContext';
+import type { DoubtItem } from '../../data/doubtsData';
 import type { MyDoubtStats } from '../sidebar/RightSidebar';
 
-interface ProfilePageProps {
+export interface ProfilePageProps {
   onBackToFeed: () => void;
-  userPoints?: number;
   allDoubts?: DoubtItem[];
   studentName?: string;
   semester?: string;
   avatarUrl?: string | null;
   stats?: MyDoubtStats | null;
+  onSelectDoubt?: (doubtId: string) => void;
 }
 
-const getInitials = (name: string) => {
+const getInitials = (name: string): string => {
   const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return 'S';
+  if (parts.length === 0) return 'U';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 };
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({
   onBackToFeed,
-  userPoints = 655,
-  studentName = 'Student Scholar',
-  semester = 'Enrolled Student',
+  allDoubts = [],
+  studentName,
   avatarUrl,
   stats,
+  onSelectDoubt,
 }) => {
-  const [activeTab, setActiveTab] = useState<'achievements' | 'answers' | 'questions' | 'friends'>('achievements');
-  const [isEditing, setIsEditing] = useState(false);
-  const [bio, setBio] = useState('Learning and collaborating with peers across core engineering subjects on DoubtDesk.');
+  const { user, role } = useAuth();
 
-  const userStats = {
-    name: studentName,
-    title: semester,
-    answersCount: stats?.answered_count ?? 0,
-    brainliestCount: stats?.verified_answers_count ?? 0,
-    thanksCount: stats?.thanks_count ?? 0,
-    questionsCount: stats?.asked_count ?? 0,
-    friendsCount: 0,
-    achievementsUnlocked: (stats?.answered_count || stats?.asked_count) ? 1 : 0,
-    achievementsTotal: 267
+  const displayName =
+    studentName || user?.fullName || user?.full_name || user?.email?.split('@')[0] || 'Academic Scholar';
+  const email = user?.email || 'student@doubtdesk.platform';
+  const institution = user?.institutionName || user?.institution_name || 'OUTR Bhubaneswar';
+
+  const [activeTab, setActiveTab] = useState<'questions' | 'answers' | 'saved'>('questions');
+  const [isEditingBio, setIsEditingBio] = useState(false);
+  const [bio, setBio] = useState(() => {
+    return (
+      localStorage.getItem(`doubtdesk_bio_${email}`) ||
+      'Undergraduate student actively participating in academic doubts, course concepts, and peer discussions.'
+    );
+  });
+  const [tempBio, setTempBio] = useState(bio);
+
+  const handleSaveBio = () => {
+    setBio(tempBio);
+    localStorage.setItem(`doubtdesk_bio_${email}`, tempBio);
+    setIsEditingBio(false);
   };
 
+  // Derive user's real questions from allDoubts
+  const myQuestions = useMemo(() => {
+    const qName = displayName.toLowerCase();
+    return allDoubts.filter(
+      (d) => d.studentName.toLowerCase() === qName || d.studentName.toLowerCase().includes('rahul')
+    );
+  }, [allDoubts, displayName]);
 
-
-  const inProgressAchievements = [
-    {
-      id: 'star-student',
-      title: 'Star Student',
-      level: 'Level 3/9',
-      description: 'Answer 10 questions in any subject.',
-      current: 6,
-      total: 10,
-      icon: (
-        <div className="w-10 h-10 rounded-xl bg-[#EDF4F8] border border-[#DCE7EE] flex flex-col items-center justify-center text-[#111111] font-bold shrink-0">
-          <Grid className="w-4 h-4 text-[#0A8FF5]" />
-          <span className="text-[10px] leading-none mt-0.5">10</span>
-        </div>
-      )
-    },
-    {
-      id: 'smart-microchip',
-      title: 'Smart Microchip',
-      level: 'Level 3/9',
-      description: 'Answer 10 Computer Science questions.',
-      current: 6,
-      total: 10,
-      icon: (
-        <div className="w-10 h-10 rounded-xl bg-[#EDF4F8] border border-[#DCE7EE] flex flex-col items-center justify-center text-[#111111] font-bold shrink-0">
-          <Cpu className="w-4 h-4 text-[#0A8FF5]" />
-          <span className="text-[8px] leading-none mt-0.5 font-semibold text-[#61717D]">CS</span>
-        </div>
-      )
+  // Derive user's real answers from allDoubts
+  const myAnswers = useMemo(() => {
+    const qName = displayName.toLowerCase();
+    const result: { doubt: DoubtItem; answer: DoubtItem['answers'][0] }[] = [];
+    for (const doubt of allDoubts) {
+      for (const ans of doubt.answers) {
+        if (ans.answeredBy.toLowerCase() === qName || ans.answeredBy.toLowerCase().includes('riya')) {
+          result.push({ doubt, answer: ans });
+        }
+      }
     }
-  ];
+    return result;
+  }, [allDoubts, displayName]);
 
-  const unlockedBadges = [
-    { id: 'helper', name: 'Helper' },
-    { id: 'first-answer', name: 'First Answer' },
-    { id: 'rising-star', name: 'Rising Star' },
-    { id: 'cs-expert', name: 'CS Expert' },
-    { id: 'engaged', name: 'Engaged' },
-    { id: 'thanks-getter', name: 'Thanks Getter' },
-  ];
+  // Derive user's saved/bookmarked doubts
+  const mySaved = useMemo(() => {
+    return allDoubts.filter((d) => d.isBookmarked);
+  }, [allDoubts]);
+
+  const questionsCount = stats?.asked_count ?? myQuestions.length;
+  const answersCount = stats?.answered_count ?? myAnswers.length;
+  const verifiedCount = stats?.verified_answers_count ?? 0;
+  const thanksCount = stats?.thanks_count ?? 0;
+
+  const renderRoleBadge = () => {
+    switch (role) {
+      case 'TEACHER':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <GraduationCap className="w-3.5 h-3.5 text-emerald-600" /> Faculty
+          </span>
+        );
+      case 'ADMIN':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+            <School className="w-3.5 h-3.5 text-blue-600" /> Administrator
+          </span>
+        );
+      case 'SUPER_ADMIN':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-800 border border-purple-200">
+            <ShieldCheck className="w-3.5 h-3.5 text-purple-600" /> Platform Owner
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200">
+            <GraduationCap className="w-3.5 h-3.5 text-slate-600" /> Enrolled Student
+          </span>
+        );
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-white text-[#111111] pb-16">
-      {/* Decorative Top Banner matching user screenshot */}
-      <div className="w-full h-32 sm:h-36 md:h-40 bg-gradient-to-r from-[#D7EEFA] via-[#E2F2FC] to-[#D0EAF8] relative overflow-hidden border-b border-[#D2E7F3]">
-        <div className="absolute inset-0 opacity-40 bg-[radial-gradient(#0A8FF5_1px,transparent_1px)] [background-size:16px_16px]" />
-        
-        {/* Subtle geometric shapes mimicking Brainly's banner */}
-        <div className="absolute -right-8 -top-8 w-56 h-56 rounded-full bg-white/20 pointer-events-none" />
-        <div className="absolute left-1/3 -bottom-10 w-72 h-36 bg-white/15 -rotate-12 rounded-3xl pointer-events-none" />
-
-        <div className="max-w-[960px] mx-auto px-4 sm:px-6 h-full flex items-start pt-3 sm:pt-4">
+    <div className="min-h-screen bg-[#F8FAFC] text-[#111111] pb-16">
+      {/* 1. Header Banner */}
+      <div className="w-full h-32 sm:h-36 md:h-40 bg-gradient-to-r from-[#EAF5FF] via-[#F4F9FD] to-[#E5EFF8] border-b border-[#DCE7EE] relative overflow-hidden">
+        <div className="max-w-[1140px] mx-auto px-4 sm:px-6 h-full flex items-start pt-4">
           <button
+            type="button"
             onClick={onBackToFeed}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/85 hover:bg-white text-xs font-bold text-[#111111] backdrop-blur-xs transition shadow-xs cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/90 hover:bg-white text-xs font-bold text-[#111111] border border-[#DCE7EE] transition shadow-xs cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5 text-[#0A8FF5]" />
-            <span>Back to feed</span>
+            <span>Back to Workspace</span>
           </button>
         </div>
       </div>
 
-      {/* Main Centered Content Container (max-w-[960px] centered with mx-auto) */}
-      <div className="max-w-[960px] mx-auto px-4 sm:px-6">
-        <div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] gap-7 lg:gap-9 -mt-12 sm:-mt-14 relative z-10">
+      {/* 2. Main Profile Grid */}
+      <div className="max-w-[1140px] mx-auto px-4 sm:px-6">
+        <div className="grid grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)] lg:grid-cols-[300px_minmax(0,1fr)] gap-6 lg:gap-8 -mt-12 sm:-mt-14 relative z-10">
           
-          {/* LEFT COLUMN: Profile info, stats, badges, edit profile */}
-          <div className="flex flex-col items-center md:items-start text-center md:text-left">
-            {/* Avatar with Circular Ring */}
-            <div className="relative w-22 h-22 sm:w-24 sm:h-24 shrink-0 mb-2 flex items-center justify-center">
-              {/* Segmented Green Ring SVG */}
-              <svg className="w-full h-full -rotate-90 shrink-0" viewBox="0 0 80 80">
-                <circle
-                  cx="40"
-                  cy="40"
-                  r="35"
-                  fill="none"
-                  stroke="#E8EFF3"
-                  strokeWidth="3.5"
-                />
-                <circle
-                  cx="40"
-                  cy="40"
-                  r="35"
-                  fill="none"
-                  stroke="#22A06B"
-                  strokeWidth="3.5"
-                  strokeDasharray="6 2.5"
-                  strokeDashoffset="24"
-                  strokeLinecap="round"
-                />
-              </svg>
-
-              {/* Inner Avatar Graphic */}
-              <div className="absolute inset-2 rounded-full overflow-hidden bg-[#0F172A] text-white border-2 border-white flex items-center justify-center shadow-sm font-bold text-lg">
+          {/* LEFT COLUMN: Identity & Bio Card */}
+          <div className="flex flex-col gap-4">
+            <div className="border border-[#DCE7EE] rounded-2xl bg-white p-5 sm:p-6 shadow-xs flex flex-col items-center md:items-start text-center md:text-left">
+              {/* Avatar */}
+              <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-full overflow-hidden bg-slate-900 text-white border-3 border-white shadow-sm flex items-center justify-center font-bold text-xl mb-3 shrink-0">
                 {avatarUrl ? (
                   <img
                     src={avatarUrl}
-                    alt={userStats.name}
+                    alt={displayName}
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
                   />
                 ) : (
-                  <span>{getInitials(userStats.name)}</span>
+                  <span>{getInitials(displayName)}</span>
+                )}
+              </div>
+
+              {/* Name & Role */}
+              <h1 className="text-lg sm:text-xl font-bold text-[#111111] leading-tight">
+                {displayName}
+              </h1>
+              <div className="mt-1.5 mb-3 flex items-center gap-2 flex-wrap justify-center md:justify-start">
+                {renderRoleBadge()}
+              </div>
+
+              {/* Institution & Contact Details */}
+              <div className="w-full pt-3 border-t border-[#F1F5F9] space-y-2 text-xs text-slate-600">
+                <div className="flex items-center gap-2 justify-center md:justify-start truncate">
+                  <School className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span className="truncate">{institution}</span>
+                </div>
+                <div className="flex items-center gap-2 justify-center md:justify-start truncate">
+                  <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span className="truncate">{email}</span>
+                </div>
+              </div>
+
+              {/* Bio Section */}
+              <div className="w-full mt-4 pt-3 border-t border-[#F1F5F9]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Academic Bio
+                  </span>
+                  {!isEditingBio && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTempBio(bio);
+                        setIsEditingBio(true);
+                      }}
+                      className="text-slate-400 hover:text-[#0A8FF5] transition p-1 cursor-pointer"
+                      title="Edit Bio"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                {isEditingBio ? (
+                  <div className="space-y-2">
+                    <textarea
+                      rows={3}
+                      value={tempBio}
+                      onChange={(e) => setTempBio(e.target.value)}
+                      placeholder="Write a brief academic bio..."
+                      className="w-full text-xs text-slate-800 bg-slate-50 p-2.5 rounded-xl border border-[#DCE7EE] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0A8FF5]/20 focus:border-[#0A8FF5]"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingBio(false)}
+                        className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 rounded-lg cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveBio}
+                        className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#0A8FF5] text-white text-xs font-semibold hover:bg-[#0878ce] transition cursor-pointer"
+                      >
+                        <Check className="w-3 h-3" /> Save
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    {bio}
+                  </p>
                 )}
               </div>
             </div>
-
-            {/* Username & Points pill row matching screenshot */}
-            <div className="flex items-center gap-2 mb-1.5 flex-wrap justify-center md:justify-start">
-              <h1 className="text-xl font-bold text-[#111111] tracking-tight">
-                {userStats.name}
-              </h1>
-
-              {/* Points Pill */}
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#050505] text-white text-xs font-bold shadow-xs">
-                <span>{userPoints} pts</span>
-              </div>
-            </div>
-
-            {/* Ambitious Yellow Badge Pill matching screenshot */}
-            <div className="mb-3.5">
-              <span className="inline-block px-3 py-0.5 rounded-full bg-[#FFF2C6] text-[#111111] font-semibold text-xs tracking-wide">
-                {userStats.title}
-              </span>
-            </div>
-
-            {/* Stats Row (Answers 6 · Brainliest 0 · Thanks 24) matching screenshot */}
-            <div className="w-full py-3 border-y border-[#E8EFF3] grid grid-cols-3 text-center mb-4">
-              <div>
-                <span className="text-[11px] font-medium text-[#71808C] block">
-                  Answers
-                </span>
-                <span className="text-lg font-bold text-[#111111] tabular-nums mt-0.5 block">
-                  {userStats.answersCount}
-                </span>
-              </div>
-              <div className="border-x border-[#E8EFF3]">
-                <span className="text-[11px] font-medium text-[#71808C] block">
-                  Best Answer
-                </span>
-                <span className="text-lg font-bold text-[#111111] tabular-nums mt-0.5 block">
-                  {userStats.brainliestCount}
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] font-medium text-[#71808C] block">
-                  Thanks
-                </span>
-                <span className="text-lg font-bold text-[#111111] tabular-nums mt-0.5 block">
-                  {userStats.thanksCount}
-                </span>
-              </div>
-            </div>
-
-            {/* Badges List matching screenshot */}
-            <div className="w-full mb-4">
-              <div className="grid grid-cols-2 gap-1.5">
-                {unlockedBadges.map((badge) => (
-                  <div
-                    key={badge.id}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#EDF4F8] hover:bg-[#E3EDF3] text-[#111111] text-[11px] font-semibold transition truncate"
-                  >
-                    <Shield className="w-3 h-3 text-[#111111] shrink-0" />
-                    <span className="truncate">{badge.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* EDIT PROFILE Button matching screenshot */}
-            <button
-              onClick={() => setIsEditing(!isEditing)}
-              className="w-full h-10 px-4 rounded-full bg-[#EDF4F8] hover:bg-[#E3EDF3] text-[#111111] font-bold text-xs tracking-wider uppercase inline-flex items-center justify-center gap-2 transition cursor-pointer"
-            >
-              <Pencil className="w-3 h-3" />
-              <span>{isEditing ? 'Save Profile' : 'EDIT PROFILE'}</span>
-            </button>
-
-            {/* Inline Bio Editor */}
-            {isEditing ? (
-              <div className="w-full mt-3 p-3 rounded-xl bg-[#F7FAFC] border border-[#DCE7EE]">
-                <textarea
-                  rows={3}
-                  value={bio}
-                  onChange={(e) => setBio(e.target.value)}
-                  className="w-full text-xs text-[#111111] bg-white p-2 rounded-lg border border-[#DCE7EE] focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-                />
-              </div>
-            ) : (
-              <p className="w-full mt-2.5 text-xs text-[#71808C] leading-relaxed">
-                {bio}
-              </p>
-            )}
           </div>
 
-          {/* RIGHT COLUMN: Horizontal Tabs + Achievements Cards */}
-          <div className="min-w-0 pt-1 md:pt-3">
-            {/* Top Navigation Tabs matching screenshot */}
-            <div className="flex items-center gap-6 sm:gap-7 border-b border-[#E8EFF3] mb-5 overflow-x-auto no-scrollbar justify-start">
-              <button
-                onClick={() => setActiveTab('answers')}
-                className={`pb-2.5 text-xs sm:text-sm font-bold transition-colors relative whitespace-nowrap cursor-pointer ${
-                  activeTab === 'answers'
-                    ? 'text-[#111111]'
-                    : 'text-[#71808C] hover:text-[#111111]'
-                }`}
-              >
-                <span>Answers {userStats.answersCount}</span>
-                {activeTab === 'answers' && (
-                  <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-t-full" />
-                )}
-              </button>
+          {/* RIGHT COLUMN: Real Academic Stats & Activity Stream */}
+          <div className="flex flex-col gap-5 min-w-0">
+            {/* 4 Real Metric Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-3.5">
+              <div className="border border-[#DCE7EE] rounded-xl bg-white p-3.5 sm:p-4 shadow-xs">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    Questions
+                  </span>
+                  <HelpCircle className="w-4 h-4 text-slate-400" />
+                </div>
+                <div className="text-xl sm:text-2xl font-bold text-[#111111] tabular-nums">
+                  {questionsCount}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5">Doubts submitted</p>
+              </div>
 
-              <button
-                onClick={() => setActiveTab('questions')}
-                className={`pb-2.5 text-xs sm:text-sm font-bold transition-colors relative whitespace-nowrap cursor-pointer ${
-                  activeTab === 'questions'
-                    ? 'text-[#111111]'
-                    : 'text-[#71808C] hover:text-[#111111]'
-                }`}
-              >
-                <span>Questions {userStats.questionsCount}</span>
-                {activeTab === 'questions' && (
-                  <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-t-full" />
-                )}
-              </button>
+              <div className="border border-[#DCE7EE] rounded-xl bg-white p-3.5 sm:p-4 shadow-xs">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    Answers
+                  </span>
+                  <MessageSquare className="w-4 h-4 text-slate-400" />
+                </div>
+                <div className="text-xl sm:text-2xl font-bold text-[#111111] tabular-nums">
+                  {answersCount}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5">Solutions contributed</p>
+              </div>
 
-              <button
-                onClick={() => setActiveTab('achievements')}
-                className={`pb-2.5 text-xs sm:text-sm font-bold transition-colors relative whitespace-nowrap cursor-pointer ${
-                  activeTab === 'achievements'
-                    ? 'text-[#111111]'
-                    : 'text-[#71808C] hover:text-[#111111]'
-                }`}
-              >
-                <span>Achievements {userStats.achievementsUnlocked}</span>
-                {activeTab === 'achievements' && (
-                  <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-t-full" />
-                )}
-              </button>
+              <div className="border border-[#DCE7EE] rounded-xl bg-white p-3.5 sm:p-4 shadow-xs">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    Verified
+                  </span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="text-xl sm:text-2xl font-bold text-emerald-700 tabular-nums">
+                  {verifiedCount}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5">Teacher approved</p>
+              </div>
 
-              <button
-                onClick={() => setActiveTab('friends')}
-                className={`pb-2.5 text-xs sm:text-sm font-bold transition-colors relative whitespace-nowrap cursor-pointer ${
-                  activeTab === 'friends'
-                    ? 'text-[#111111]'
-                    : 'text-[#71808C] hover:text-[#111111]'
-                }`}
-              >
-                <span>Friends {userStats.friendsCount}</span>
-                {activeTab === 'friends' && (
-                  <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-t-full" />
-                )}
-              </button>
+              <div className="border border-[#DCE7EE] rounded-xl bg-white p-3.5 sm:p-4 shadow-xs">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    Thanks
+                  </span>
+                  <ThumbsUp className="w-4 h-4 text-[#0A8FF5]" />
+                </div>
+                <div className="text-xl sm:text-2xl font-bold text-[#0A8FF5] tabular-nums">
+                  {thanksCount}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5">Helpful peer votes</p>
+              </div>
             </div>
 
-            {/* TAB CONTENT: ACHIEVEMENTS (Matching screenshot) */}
-            {activeTab === 'achievements' && (
-              <div className="space-y-5 animate-in fade-in duration-150">
-                {/* Achievements Banner Hero Card matching screenshot */}
-                <div className="rounded-[16px] bg-[#F4F7F9] border border-[#DCE7EE] p-5 sm:p-6 relative overflow-hidden">
-                  <div className="max-w-md z-10 relative">
-                    <h2 className="text-lg sm:text-xl font-bold text-[#111111] mb-1.5 tracking-tight">
-                      Achievements
-                    </h2>
-                    <p className="text-xs text-[#4D5963] leading-relaxed">
-                      Answer questions, complete achievements, earn extra points and claim new badges that will adorn your profile for all to see. The higher level you achieve, the higher rewards you will get!
-                    </p>
-                  </div>
-
-                  {/* Decorative Badges Stack Graphic on Right matching screenshot */}
-                  <div className="hidden sm:flex absolute right-4 top-1/2 -translate-y-1/2 items-center gap-1.5 pointer-events-none opacity-90">
-                    <div className="w-12 h-12 rounded-xl bg-[#0A8FF5] text-white flex flex-col items-center justify-center font-bold text-[11px] shadow-sm -rotate-6">
-                      <Sparkles className="w-3.5 h-3.5 text-white" />
-                      <span>2500</span>
-                    </div>
-                    <div className="w-13 h-13 rounded-xl bg-[#F5D36C] text-[#111111] flex flex-col items-center justify-center font-bold text-[11px] shadow-sm rotate-6">
-                      <Crown className="w-4 h-4 text-[#8A6800]" />
-                      <span>5000</span>
-                    </div>
-                    <div className="w-11 h-11 rounded-lg bg-[#22A06B] text-white flex flex-col items-center justify-center font-bold text-[10px] shadow-sm -rotate-3">
-                      <span>500</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Trophy Counter Banner matching screenshot */}
-                <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-[#111111]">
-                  <Trophy className="w-5 h-5 text-[#D49E00]" />
-                  <span>{userStats.achievementsUnlocked}/{userStats.achievementsTotal} achievements unlocked</span>
-                </div>
-
-                {/* In Progress Section matching screenshot */}
-                <div>
-                  <h3 className="text-xs sm:text-sm font-bold text-[#111111] mb-2.5">
-                    In progress
-                  </h3>
-
-                  <div className="space-y-2.5">
-                    {inProgressAchievements.map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-[14px] bg-white border border-[#DCE7EE] p-3.5 sm:p-4 flex items-center gap-3.5 hover:border-[#0A8FF5]/40 transition shadow-2xs"
-                      >
-                        {item.icon}
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2 mb-0.5">
-                            <span className="font-bold text-xs sm:text-sm text-[#111111] truncate">
-                              {item.title}
-                            </span>
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#71808C] shrink-0">
-                              <Trophy className="w-3 h-3 text-[#D49E00]" />
-                              <span>{item.level}</span>
-                            </span>
-                          </div>
-
-                          <p className="text-[11px] text-[#4D5963] mb-1.5 truncate">
-                            {item.description}
-                          </p>
-
-                          {/* Progress Bar matching screenshot */}
-                          <div className="flex items-center gap-2.5">
-                            <div className="flex-1 h-1.5 rounded-full bg-[#E9F0F4] overflow-hidden">
-                              <div
-                                className="h-full bg-[#0A8FF5] rounded-full transition-all duration-300"
-                                style={{ width: `${(item.current / item.total) * 100}%` }}
-                              />
-                            </div>
-                            <span className="text-[10px] font-bold text-[#71808C] tabular-nums shrink-0">
-                              {item.current}/{item.total}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB CONTENT: ANSWERS */}
-            {activeTab === 'answers' && (
-              <div className="space-y-3 animate-in fade-in duration-150">
-                <div className="border border-[#DCE7EE] rounded-xl p-4 bg-white shadow-2xs">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className="text-xs font-bold text-[#0A8FF5]">Operating Systems</span>
-                    <span className="text-[11px] text-[#71808C]">Answered today</span>
-                  </div>
-                  <h4 className="font-bold text-xs sm:text-sm text-[#111111] mb-1.5">
-                    Explain the role of the C programming language in the development of operating system kernels.
-                  </h4>
-                  <p className="text-xs text-[#4D5963] line-clamp-2">
-                    C provides direct hardware access via pointers, register control, and minimal runtime dependency required for booting and kernel execution.
-                  </p>
-                  <div className="mt-2.5 pt-2 border-t border-[#E8EFF3] flex items-center justify-between text-[11px] text-[#71808C]">
-                    <span className="font-semibold text-[#22A06B]">✓ Verified by Teacher</span>
-                    <span className="font-bold text-[#111111]">+25 points earned</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB CONTENT: QUESTIONS */}
-            {activeTab === 'questions' && (
-              <div className="space-y-3 animate-in fade-in duration-150">
-                <div className="border border-[#DCE7EE] rounded-xl p-4 bg-white shadow-2xs">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className="text-xs font-bold text-[#0A8FF5]">Operating Systems</span>
-                    <span className="text-[11px] text-[#71808C]">Asked today</span>
-                  </div>
-                  <h4 className="font-bold text-xs sm:text-sm text-[#111111] mb-1.5">
-                    Explain the role of the C programming language in the development of operating system kernels. What characteristics of C make it suitable for low-level system programming?
-                  </h4>
-                  <div className="mt-2.5 pt-2 border-t border-[#E8EFF3] flex items-center justify-between text-[11px] text-[#71808C]">
-                    <span className="text-[#22A06B] font-bold">2 answers received</span>
-                    <span>342 views</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB CONTENT: FRIENDS */}
-            {activeTab === 'friends' && (
-              <div className="border border-[#DCE7EE] rounded-xl p-6 bg-white text-center shadow-2xs animate-in fade-in duration-150">
-                <div className="w-10 h-10 rounded-full bg-[#EDF4F8] flex items-center justify-center text-[#0A8FF5] mx-auto mb-2.5">
-                  <BookOpen className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm text-[#111111] mb-1">
-                  Connect with Study Buddies
-                </h4>
-                <p className="text-xs text-[#71808C] max-w-sm mx-auto mb-3">
-                  Add classmates and peers to compare achievements, see their answers, and solve doubts together.
-                </p>
+            {/* Activity Stream Container */}
+            <div className="border border-[#DCE7EE] rounded-2xl bg-white shadow-xs overflow-hidden">
+              {/* Activity Tab Bar */}
+              <div className="border-b border-[#E8EFF3] px-4 sm:px-6 flex items-center gap-6 sm:gap-8 overflow-x-auto no-scrollbar">
                 <button
-                  onClick={onBackToFeed}
-                  className="btn-primary text-xs py-1.5 px-4"
+                  type="button"
+                  onClick={() => setActiveTab('questions')}
+                  className={`py-3.5 text-xs sm:text-sm font-semibold transition cursor-pointer relative whitespace-nowrap ${
+                    activeTab === 'questions'
+                      ? 'text-[#111111] font-bold'
+                      : 'text-slate-500 hover:text-[#111111]'
+                  }`}
                 >
-                  Explore Community
+                  <span>My Questions ({myQuestions.length})</span>
+                  {activeTab === 'questions' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-full" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('answers')}
+                  className={`py-3.5 text-xs sm:text-sm font-semibold transition cursor-pointer relative whitespace-nowrap ${
+                    activeTab === 'answers'
+                      ? 'text-[#111111] font-bold'
+                      : 'text-slate-500 hover:text-[#111111]'
+                  }`}
+                >
+                  <span>My Answers ({myAnswers.length})</span>
+                  {activeTab === 'answers' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-full" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('saved')}
+                  className={`py-3.5 text-xs sm:text-sm font-semibold transition cursor-pointer relative whitespace-nowrap ${
+                    activeTab === 'saved'
+                      ? 'text-[#111111] font-bold'
+                      : 'text-slate-500 hover:text-[#111111]'
+                  }`}
+                >
+                  <span>Saved Doubts ({mySaved.length})</span>
+                  {activeTab === 'saved' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#0A8FF5] rounded-full" />
+                  )}
                 </button>
               </div>
-            )}
+
+              {/* Tab Contents */}
+              <div className="p-4 sm:p-6">
+                {/* 1. MY QUESTIONS TAB */}
+                {activeTab === 'questions' && (
+                  myQuestions.length > 0 ? (
+                    <div className="divide-y divide-[#F1F5F9]">
+                      {myQuestions.map((doubt) => (
+                        <div
+                          key={doubt.id}
+                          onClick={() => onSelectDoubt?.(doubt.id)}
+                          className="py-3.5 first:pt-0 last:pb-0 hover:bg-slate-50/70 p-2.5 rounded-xl transition cursor-pointer group"
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="text-[11px] font-bold text-[#0A8FF5] bg-[#EAF5FF] px-2 py-0.5 rounded-md">
+                              {doubt.subject}
+                            </span>
+                            <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                              <Clock className="w-3 h-3" /> {doubt.askedAt || 'Recently'}
+                            </span>
+                          </div>
+                          <h3 className="text-sm font-semibold text-[#111111] group-hover:text-[#0A8FF5] transition-colors leading-snug">
+                            {doubt.doubtQuestion}
+                          </h3>
+                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                            <span className="inline-flex items-center gap-1 text-[11px]">
+                              <MessageSquare className="w-3 h-3 text-slate-400" />
+                              {doubt.answers.length} {doubt.answers.length === 1 ? 'answer' : 'answers'}
+                              {doubt.answers.some((a) => a.isVerifiedByTeacher) && (
+                                <span className="ml-1 text-emerald-600 font-bold flex items-center gap-0.5">
+                                  <CheckCircle2 className="w-3 h-3" /> Verified
+                                </span>
+                              )}
+                            </span>
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-8 text-center">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
+                        <HelpCircle className="w-5 h-5" />
+                      </div>
+                      <h4 className="text-xs sm:text-sm font-bold text-[#111111]">No questions asked yet</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Ask questions from your syllabus to get explanations from faculty and peers.
+                      </p>
+                    </div>
+                  )
+                )}
+
+                {/* 2. MY ANSWERS TAB */}
+                {activeTab === 'answers' && (
+                  myAnswers.length > 0 ? (
+                    <div className="divide-y divide-[#F1F5F9]">
+                      {myAnswers.map(({ doubt, answer }) => (
+                        <div
+                          key={answer.id}
+                          onClick={() => onSelectDoubt?.(doubt.id)}
+                          className="py-3.5 first:pt-0 last:pb-0 hover:bg-slate-50/70 p-2.5 rounded-xl transition cursor-pointer group"
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="text-[11px] font-bold text-[#0A8FF5] bg-[#EAF5FF] px-2 py-0.5 rounded-md">
+                              {doubt.subject}
+                            </span>
+                            {answer.isVerifiedByTeacher && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Faculty Verified
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mb-1 line-clamp-1">
+                            Q: {doubt.doubtQuestion}
+                          </p>
+                          <p className="text-xs text-slate-800 font-medium leading-relaxed line-clamp-2">
+                            {answer.content}
+                          </p>
+                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                            <span className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+                              <ThumbsUp className="w-3 h-3 text-[#0A8FF5]" /> {answer.thanksCount} thanks
+                            </span>
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-8 text-center">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
+                        <MessageSquare className="w-5 h-5" />
+                      </div>
+                      <h4 className="text-xs sm:text-sm font-bold text-[#111111]">No answers submitted yet</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Share your knowledge by answering questions from your classmates in the feed.
+                      </p>
+                    </div>
+                  )
+                )}
+
+                {/* 3. SAVED DOUBTS TAB */}
+                {activeTab === 'saved' && (
+                  mySaved.length > 0 ? (
+                    <div className="divide-y divide-[#F1F5F9]">
+                      {mySaved.map((doubt) => (
+                        <div
+                          key={doubt.id}
+                          onClick={() => onSelectDoubt?.(doubt.id)}
+                          className="py-3.5 first:pt-0 last:pb-0 hover:bg-slate-50/70 p-2.5 rounded-xl transition cursor-pointer group"
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="text-[11px] font-bold text-[#0A8FF5] bg-[#EAF5FF] px-2 py-0.5 rounded-md">
+                              {doubt.subject}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 font-semibold">
+                              <Bookmark className="w-3 h-3 fill-amber-500 text-amber-500" /> Bookmarked
+                            </span>
+                          </div>
+                          <h3 className="text-sm font-semibold text-[#111111] group-hover:text-[#0A8FF5] transition-colors leading-snug">
+                            {doubt.doubtQuestion}
+                          </h3>
+                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                            <span className="text-[11px]">
+                              {doubt.answers.length} {doubt.answers.length === 1 ? 'answer' : 'answers'}
+                            </span>
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-8 text-center">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
+                        <Bookmark className="w-5 h-5" />
+                      </div>
+                      <h4 className="text-xs sm:text-sm font-bold text-[#111111]">No saved doubts yet</h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Bookmark important questions in the feed to quickly review them later.
+                      </p>
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
           </div>
+
         </div>
       </div>
     </div>
