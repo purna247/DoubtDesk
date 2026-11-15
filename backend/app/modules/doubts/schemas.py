@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -17,6 +17,7 @@ class DoubtCreate(BaseModel):
     course_offering_id: Optional[uuid.UUID] = None
     canonical_subject_id: Optional[uuid.UUID] = None
     concept_id: Optional[uuid.UUID] = None
+    syllabus_node_id: Optional[uuid.UUID] = None
     question_id: Optional[uuid.UUID] = None
     title: str = Field(..., min_length=3, max_length=255)
     body_markdown: str = Field(..., min_length=5)
@@ -68,6 +69,9 @@ class DoubtOut(BaseModel):
     canonical_subject_id: Optional[uuid.UUID] = None
     concept_id: Optional[uuid.UUID] = None
     concept_name: Optional[str] = None
+    syllabus_node_id: Optional[uuid.UUID] = None
+    syllabus_node_title: Optional[str] = None
+    semantic_metadata: Optional[Dict[str, Any]] = None
     title: str
     body_markdown: str
     is_anonymous_to_peers: bool

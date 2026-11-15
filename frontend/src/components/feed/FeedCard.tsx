@@ -68,6 +68,13 @@ export const FeedCard: React.FC<FeedCardProps> = ({
 
       {/* 2. Question Text (Brainly clean typography) */}
       <div className="mb-5">
+        {doubt.syllabusNodeTitle && (
+          <div className="mb-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200/60 px-2.5 py-0.5 text-[11px] font-semibold text-[#0A8FF5]">
+              Topic: {doubt.syllabusNodeTitle}
+            </span>
+          </div>
+        )}
         <h2 className="text-[17px] sm:text-[18px] font-bold text-[#111111] leading-snug tracking-tight">
           {doubt.doubtQuestion}
         </h2>

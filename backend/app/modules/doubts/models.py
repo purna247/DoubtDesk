@@ -12,7 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -42,11 +42,15 @@ class Doubt(Base):
     concept_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("concepts.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    syllabus_node_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("syllabus_nodes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     question_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("questions.id", ondelete="SET NULL"), nullable=True, index=True
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    semantic_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     is_anonymous_to_peers: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), default="open", nullable=False
@@ -79,6 +83,7 @@ class Doubt(Base):
         "DoubtFlag", back_populates="doubt", cascade="all, delete-orphan"
     )
     concept: Mapped[Optional["app.modules.knowledge.models.Concept"]] = relationship("app.modules.knowledge.models.Concept")
+    syllabus_node: Mapped[Optional["app.modules.knowledge.models.SyllabusNode"]] = relationship("app.modules.knowledge.models.SyllabusNode")
 
 
 class DoubtAnswer(Base):

@@ -223,6 +223,9 @@ class DoubtService:
             canonical_subject_id=doubt.canonical_subject_id,
             concept_id=doubt.concept_id,
             concept_name=doubt.concept.canonical_name if doubt.concept else None,
+            syllabus_node_id=doubt.syllabus_node_id,
+            syllabus_node_title=doubt.syllabus_node.title if getattr(doubt, 'syllabus_node', None) else None,
+            semantic_metadata=doubt.semantic_metadata,
             title=doubt.title,
             body_markdown=doubt.body_markdown,
             is_anonymous_to_peers=doubt.is_anonymous_to_peers,
@@ -251,6 +254,7 @@ class DoubtService:
             course_offering_id=req.course_offering_id,
             canonical_subject_id=req.canonical_subject_id,
             concept_id=req.concept_id,
+            syllabus_node_id=req.syllabus_node_id,
             question_id=req.question_id,
             title=req.title,
             body_markdown=req.body_markdown,
@@ -278,6 +282,7 @@ class DoubtService:
                 selectinload(Doubt.author).selectinload(User.institution_memberships).selectinload(InstitutionMembership.roles),
                 selectinload(Doubt.author).selectinload(User.platform_roles),
                 selectinload(Doubt.concept),
+                selectinload(Doubt.syllabus_node),
                 selectinload(Doubt.answers).selectinload(DoubtAnswer.author).selectinload(User.institution_memberships).selectinload(InstitutionMembership.roles),
                 selectinload(Doubt.answers).selectinload(DoubtAnswer.author).selectinload(User.platform_roles),
                 selectinload(Doubt.answers).selectinload(DoubtAnswer.comments).selectinload(DoubtComment.author),
@@ -304,6 +309,7 @@ class DoubtService:
         caller_role: str,
         course_offering_id: Optional[uuid.UUID] = None,
         concept_id: Optional[uuid.UUID] = None,
+        syllabus_node_id: Optional[uuid.UUID] = None,
     ) -> List[DoubtOut]:
         """List campus/course doubts respecting privacy safeguards."""
         stmt = (
@@ -312,6 +318,7 @@ class DoubtService:
                 selectinload(Doubt.author).selectinload(User.institution_memberships).selectinload(InstitutionMembership.roles),
                 selectinload(Doubt.author).selectinload(User.platform_roles),
                 selectinload(Doubt.concept),
+                selectinload(Doubt.syllabus_node),
                 selectinload(Doubt.answers).selectinload(DoubtAnswer.author).selectinload(User.institution_memberships).selectinload(InstitutionMembership.roles),
                 selectinload(Doubt.answers).selectinload(DoubtAnswer.author).selectinload(User.platform_roles),
                 selectinload(Doubt.answers).selectinload(DoubtAnswer.comments).selectinload(DoubtComment.author),
@@ -332,6 +339,8 @@ class DoubtService:
             )
         if concept_id:
             stmt = stmt.where(Doubt.concept_id == concept_id)
+        if syllabus_node_id:
+            stmt = stmt.where(Doubt.syllabus_node_id == syllabus_node_id)
 
         stmt = stmt.order_by(Doubt.created_at.desc())
         items = (await db.execute(stmt)).scalars().all()

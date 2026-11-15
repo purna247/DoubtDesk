@@ -39,6 +39,9 @@ export interface DoubtItem {
   studentGrade: string;
   subject: string;
   topic: string;
+  syllabusNodeId?: string;
+  syllabusNodeTitle?: string;
+  semanticMetadata?: Record<string, any>;
   askedAt: string;
   createdAtTimestamp?: number;
   rewardPoints: number;

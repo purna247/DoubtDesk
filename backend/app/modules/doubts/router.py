@@ -50,6 +50,7 @@ def _get_user_role(user: UserProfile) -> str:
 async def list_doubts(
     course_offering_id: Optional[uuid.UUID] = Query(None),
     concept_id: Optional[uuid.UUID] = Query(None),
+    syllabus_node_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: UserProfile = Depends(get_current_user),
 ):
@@ -65,6 +66,7 @@ async def list_doubts(
         caller_role=role,
         course_offering_id=course_offering_id,
         concept_id=concept_id,
+        syllabus_node_id=syllabus_node_id,
     )
 
 

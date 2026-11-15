@@ -135,6 +135,7 @@ export const StudentFeedPage: React.FC = () => {
         title: doubtData.question.slice(0, 255),
         body_markdown: doubtData.question,
         course_offering_id: doubtData.courseOfferingId,
+        syllabus_node_id: doubtData.syllabusNodeId || null,
         is_anonymous_to_peers: doubtData.isAnonymousToPeers,
         visibility: 'course',
       });

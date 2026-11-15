@@ -98,7 +98,7 @@ export const PostDetailView: React.FC<PostDetailViewProps> = ({
                 </span>
               </div>
               <div className="text-xs text-[#71808C] truncate">
-                {doubt.askedAt} · {doubt.subject} · {doubt.studentGrade}
+                {doubt.askedAt} · {doubt.syllabusNodeTitle ? `${doubt.subject} (${doubt.syllabusNodeTitle})` : doubt.subject} · {doubt.studentGrade}
               </div>
             </div>
           </div>
@@ -114,6 +114,13 @@ export const PostDetailView: React.FC<PostDetailViewProps> = ({
 
         {/* The Doubt Question Body - Strictly ONE Section */}
         <div className="mb-6">
+          {doubt.syllabusNodeTitle && (
+            <div className="mb-2.5">
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200/60 px-3 py-1 text-xs font-semibold text-[#0A8FF5]">
+                Topic: {doubt.syllabusNodeTitle}
+              </span>
+            </div>
+          )}
           <h1 className="text-lg sm:text-[21px] font-bold text-[#111111] leading-relaxed tracking-tight">
             {doubt.doubtQuestion}
           </h1>
