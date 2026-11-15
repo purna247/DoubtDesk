@@ -778,48 +778,113 @@ class InterventionService:
         rag_chunks = await find_top_k_chunks(db, course_offering_id, name, top_k=2, min_score=0.65)
         primary_ref = rag_chunks[0][2] if rag_chunks else f"Course syllabus node: {name}"
 
+        # Build subject-agnostic academic intervention structure
         primer_lines = [
             f"# Remediation Primer: {name}",
             "",
-            "## 1. Core Principle & Intuition",
+            "## 1. Concept Overview",
             f"{definition}",
-            "",
-            "When approaching problems in this topic, remember the fundamental invariant:",
-            f"- Verify state transitions and edge boundary conditions for `{name}`.",
-            "- Avoid premature optimization before verifying core correctness.",
             "",
         ]
 
+        # 2. Identified Misconceptions & Clarifications
         if misconception_descs:
-            primer_lines.append("## 2. Common Pitfalls & Misconceptions Detected in Quizzes")
+            primer_lines.append("## 2. Identified Misconceptions & Clarifications")
             for m in misconception_descs:
-                primer_lines.append(f"- ⚠️ **{m}**")
+                primer_lines.append(f"- ⚠️ **Misconception**: {m}")
             primer_lines.append("")
+        else:
+            primer_lines.extend([
+                "## 2. Identified Misconceptions & Clarifications",
+                "No critical diagnostic misconceptions were flagged in recent quiz submissions.",
+                "",
+            ])
 
-        if doubt_titles:
-            primer_lines.append("## 3. Addressing Student Inquiries & Confusion Spikes")
-            primer_lines.append("Students in this cohort recently inquired about:")
-            for dt in doubt_titles[:4]:
-                primer_lines.append(f"- *\"{dt}\"*")
-            primer_lines.append("")
-            primer_lines.append("**Key Takeaway**: Maintain clear distinction between high-level conceptual guarantees and implementation edge cases. Work through the base transitions systematically.")
-            primer_lines.append("")
+        # 3. Core Academic Principles & Taxonomy
+        is_bci_types = any(w in name.lower() for w in ["types", "invasive", "category", "categories", "classification"])
+        if is_bci_types:
+            primer_lines.extend([
+                "## 3. Core Academic Principles & Taxonomy",
+                "Brain-Computer Interfaces are classified along distinct, independent engineering dimensions:",
+                "",
+                "### A. Classification by Sensor Placement (Biological Invasiveness)",
+                "1. **Non-Invasive BCI**:",
+                "   - *Placement*: Scalp surface electrodes (e.g. standard 10–20 EEG).",
+                "   - *Signal Quality*: Lower spatial resolution; signals are attenuated and filtered by skull and scalp tissue.",
+                "   - *Safety & Risk*: Completely safe, non-surgical, easily wearable.",
+                "   - *Typical Applications*: P300 virtual keyboard, motor imagery cursor control.",
+                "",
+                "2. **Partially Invasive BCI**:",
+                "   - *Placement*: Electrodes surgically placed on the exposed cortical surface beneath the skull (Electrocorticography / ECoG).",
+                "   - *Signal Quality*: High spatial and temporal resolution without skull tissue distortion.",
+                "   - *Safety & Risk*: Requires craniotomy, but electrodes remain outside the brain parenchyma (lower scarring than microelectrodes).",
+                "   - *Typical Applications*: High-accuracy speech synthesis and prosthetic motor control.",
+                "",
+                "3. **Invasive BCI**:",
+                "   - *Placement*: Microelectrode arrays (e.g. Utah Array) implanted directly inside grey matter cortical tissue.",
+                "   - *Signal Quality*: Highest spatial precision, recording single-unit action potentials (spikes) and local field potentials.",
+                "   - *Safety & Risk*: Highest surgical risk, potential glial scarring and foreign-body tissue encapsulation over time.",
+                "   - *Typical Applications*: Multi-degree-of-freedom robotic arm manipulation and intracortical neuroprosthetics.",
+                "",
+                "### B. Classification by Operational Timing (Independent Modality)",
+                "- **Synchronous (Cue-Paced)**: The system dictates when the user can transmit commands based on predefined trial stimulus windows.",
+                "- **Asynchronous (Self-Paced)**: The user initiates commands at will; the BCI continuously analyzes incoming brain signals without external cues.",
+                "",
+                "> **Pedagogical Note**: Never confuse physical invasiveness (where sensors are placed) with operational timing (system-paced vs self-paced). They are orthogonal design choices.",
+                "",
+            ])
+        else:
+            primer_lines.extend([
+                "## 3. Core Academic Principles",
+                f"Understanding `{name}` requires mastering its fundamental mechanisms and governing definitions.",
+                "- Distinguish between theoretical principles and their physical/computational implementations.",
+                "- Verify parameter dependencies and structural boundaries before proceeding to complex configurations.",
+                "",
+            ])
 
+        # 4. Practical Modalities & Illustrative Examples
+        primer_lines.extend([
+            "## 4. Practical Modalities & Illustrative Examples",
+            f"When examining `{name}` in academic problems and experimental laboratory set-ups:",
+            "- Compare the trade-offs between measurement resolution and biological invasiveness.",
+            "- Account for ambient noise, user physiological variability, and device latency.",
+            "",
+        ])
+
+        # 5. Suggested Revision Activities & Study Plan
+        primer_lines.extend([
+            "## 5. Suggested Revision Activities & Study Plan",
+            "1. Review the primary lecture slides cited below to trace block diagrams and comparison tables.",
+            "2. Construct a comparative summary matrix contrasting key parameters (e.g. spatial resolution, temporal resolution, invasiveness).",
+            "3. Formulate concise explanations for each category without confusing independent operational dimensions.",
+            "4. Complete the diagnostic self-check questions below to verify active recall.",
+            "",
+        ])
+
+        # 6. Diagnostic Self-Check Questions
+        if is_bci_types:
+            primer_lines.extend([
+                "## 6. Diagnostic Self-Check Questions",
+                "1. *Which BCI recording technique places electrodes directly on the cortical surface without penetrating brain tissue?* (Answer: Partially invasive / ECoG).",
+                "2. *Why does non-invasive scalp EEG exhibit lower spatial resolution than intracortical arrays?* (Answer: Skull and scalp tissue act as low-pass spatial filters attenuating high-frequency electrical signals).",
+                "3. *True or False: An asynchronous BCI requires an external visual cue to prompt user intention.* (Answer: False; asynchronous BCIs are self-paced).",
+                "",
+            ])
+        else:
+            primer_lines.extend([
+                "## 6. Diagnostic Self-Check Questions",
+                f"1. *What is the primary governing principle of {name}?*",
+                f"2. *How do variations in system inputs affect the stability and performance of {name}?*",
+                "",
+            ])
+
+        # 7. Grounded Lecture Slide References
         if rag_chunks:
-            primer_lines.append("## 4. Grounded Lecture Slide References")
+            primer_lines.append("## 7. Grounded Lecture Slide References")
             for chunk, _, citation in rag_chunks:
                 snippet = chunk.content_text[:240].replace('\n', ' ').strip()
                 primer_lines.append(f"- 📖 **[{citation}]**: {snippet}...")
             primer_lines.append("")
-
-        checklist_num = "5" if rag_chunks else "4"
-        primer_lines.extend([
-            f"## {checklist_num}. Guided Checklist Before Moving to Practice Items",
-            "1. Read the problem statement and identify the governing constraints.",
-            "2. State the base cases and preconditions explicitly.",
-            "3. Verify that your solution terminates on all valid sub-problem instances.",
-            "4. Complete the targeted practice exercises below to demonstrate mastery.",
-        ])
 
         primer_text = "\n".join(primer_lines)
 

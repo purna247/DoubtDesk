@@ -462,10 +462,20 @@ async def _generate_practice_questions_ai(
     ) or f"- {node.title}: {node.description or ''}"
     q_text = "\n".join(f"- {p[:220]}" for p in source_prompts[:8]) or "(No prior exam prompts)"
 
+    q_section = ""
+    if source_prompts:
+        q_section = (
+            "\n\n--- Assessment Style Guide (from Exam Question Bank) ---\n"
+            "Use the following exam prompts ONLY for question phrasing, scope, and difficulty. "
+            "DO NOT cite these unanswered exam prompts as explanatory sources:\n"
+            + "\n".join(f"- {p[:220]}" for p in source_prompts[:8])
+        )
+
     rag_text = ""
     if rag_chunks:
-        rag_text = "\n\nVerified Lecture Slides and Course Documents:\n" + "\n".join(
-            f"[{citation}]: {chunk.content_text[:800]}" for chunk, _, citation in rag_chunks
+        rag_text = (
+            "\n\n--- Verified Factual Explanatory Lecture Slides & Documents (Ground Truth for Answers & Citations) ---\n"
+            + "\n".join(f"[{citation}]: {chunk.content_text[:800]}" for chunk, _, citation in rag_chunks)
         )
 
     prompt = (
@@ -473,25 +483,29 @@ async def _generate_practice_questions_ai(
         f"Module: {node.module_title or 'Core Module'}\n"
         f"Topic: {node.title}\n"
         f"Description: {node.description or ''}\n\n"
-        f"Concepts covered:\n{concept_text}\n\n"
-        f"Reference questions from exam paper for this topic:\n{q_text}"
+        f"Concepts covered:\n{concept_text}"
+        f"{q_section}"
         f"{rag_text}\n\n"
-        "Generate 6 diverse, objectively verifiable interactive practice questions strictly grounded in the verified lecture slides and reference questions above.\n"
+        "Generate 6 diverse, objectively verifiable interactive practice questions strictly grounded in the verified lecture slides above.\n"
         "CRITICAL RULES:\n"
-        "1. Include a mix of question styles:\n"
+        "1. GROUNDING & CITATIONS:\n"
+        "   - Every generated question MUST be factually supported by the 'Verified Factual Explanatory Lecture Slides'.\n"
+        "   - The 'citation' field MUST cite the verified lecture slide or document (e.g. from the reference text), NEVER an unanswered exam question.\n"
+        "   - The 'explanation' must provide a factual 1-2 sentence explanation derived directly from the lecture material.\n"
+        "2. Include a mix of question styles:\n"
         "   - 'mcq' (4 options, exactly 1 correct)\n"
         "   - 'true_false' (statement testing a key principle, options True and False)\n"
         "   - 'fill_blank' (sentence with '[blank_1]' and accepted_answers list)\n"
         "   - 'one_word' (short recall question where answer is a single technical term with accepted_answers list)\n"
         "   - 'matching_pairs' (3-4 pairs of concepts to definitions/components)\n"
         "   - 'ordering' (3-5 process steps in chronological sequence)\n"
-        "2. Arrange difficulties: 2 'easy', 2 'medium', 2 'hard'.\n"
-        "3. Every question MUST include:\n"
+        "3. Arrange difficulties: 2 'easy', 2 'medium', 2 'hard'.\n"
+        "4. Every question MUST include:\n"
         "   - 'hint': A short nudge without revealing the answer.\n"
         "   - 'explanation': 1-2 sentence pedagogical explanation citing the slide or topic.\n"
         "   - 'citation': The exact slide deck or document cited (e.g. from the reference text).\n"
         "   - 'easier_followup': For medium/hard questions, a simpler scaffold question.\n"
-        "4. DO NOT generate long or short subjective answers. All evaluations must be 100% deterministic.\n\n"
+        "5. DO NOT generate long or short subjective answers. All evaluations must be 100% deterministic.\n\n"
         "Return valid JSON ONLY matching this schema:\n"
         "{\n"
         '  "questions": [\n'
@@ -657,13 +671,24 @@ async def _ensure_node_practice_bank(
         ).scalars().all()
     )
 
-    # Retrieve relevant RAG chunks from slides, notes, and syllabus for this node
+    # Retrieve relevant RAG chunks strictly from explanatory slides and lecture notes for this node
     rag_chunks = await find_top_k_chunks(
         db,
         node.course_offering_id,
         f"{node.title} {node.module_title or ''}",
         top_k=3,
+        source_types=["slides", "lecture_notes"],
     )
+    if not rag_chunks:
+        rag_chunks = await find_top_k_chunks(
+            db,
+            node.course_offering_id,
+            f"{node.title} {node.module_title or ''}",
+            top_k=3,
+        )
+        # Filter out question-bank prompts from primary explanatory citations
+        rag_chunks = [rc for rc in rag_chunks if getattr(rc[0], "chunk_type", "") != "question"]
+
     primary_citation = rag_chunks[0][2] if rag_chunks else None
 
     generated = await _generate_practice_questions_ai(db, node, concepts_with_ver, source_prompts, rag_chunks=rag_chunks)
