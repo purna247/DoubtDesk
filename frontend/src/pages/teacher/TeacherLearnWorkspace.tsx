@@ -711,26 +711,16 @@ export const TeacherLearnWorkspace: React.FC<{
             )}
           </Button>
 
-          <Button
-            type="button"
-            onClick={() => void publishAll()}
-            disabled={busy || loading || allNodesPublished || generationActive}
-            className={`text-xs h-9 px-4 font-semibold ${
-              allNodesPublished
-                ? 'bg-[#F4F7F9] text-[#71808C] border border-[#DCE7EE] cursor-default'
-                : 'btn-primary'
-            }`}
-          >
-            {allNodesPublished ? (
-              <>
-                <Check className="mr-1 h-3.5 w-3.5" /> Published
-              </>
-            ) : (
-              <>
-                <Send className="mr-1 h-3.5 w-3.5" /> Publish All Content
-              </>
-            )}
-          </Button>
+          {!allNodesPublished && (
+            <Button
+              type="button"
+              onClick={() => void publishAll()}
+              disabled={busy || loading || generationActive}
+              className="btn-primary text-xs h-9 px-4 font-semibold"
+            >
+              <Send className="mr-1 h-3.5 w-3.5" /> Publish All Content
+            </Button>
+          )}
         </div>
       </header>
 
@@ -787,17 +777,13 @@ export const TeacherLearnWorkspace: React.FC<{
                           <span className="text-[11px] font-mono text-[#71808C] mt-0.5">{node.sequence_no}.</span>
                           <div className="min-w-0 flex-1">
                             <p className="text-xs leading-snug line-clamp-2">{node.title}</p>
-                            <div className="mt-1 flex items-center gap-1.5">
-                              <span
-                                className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                  isPublished
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                    : 'bg-amber-50 text-amber-800 border border-amber-200'
-                                }`}
-                              >
-                                {isPublished ? 'Published' : 'Draft'}
-                              </span>
-                            </div>
+                            {!isPublished && (
+                              <div className="mt-1 flex items-center gap-1">
+                                <span className="inline-block rounded-full px-2 py-0.5 text-[9px] font-bold uppercase bg-amber-50 text-amber-800 border border-amber-200">
+                                  Draft
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </button>
                       );
@@ -831,7 +817,7 @@ export const TeacherLearnWorkspace: React.FC<{
                             : 'bg-amber-50 text-amber-800 border border-amber-200'
                         }`}
                       >
-                        {selectedNode.status === 'published' ? 'Published to Students' : 'Draft'}
+                        {selectedNode.status === 'published' ? 'Published' : 'Draft'}
                       </span>
                     </div>
                     <h2 className="mt-1.5 text-lg sm:text-xl font-bold text-[#111111]">{selectedNode.title}</h2>
@@ -844,24 +830,14 @@ export const TeacherLearnWorkspace: React.FC<{
 
                   {/* Header Actions */}
                   <div className="flex items-center gap-2">
-                    {selectedNode.status === 'draft' ? (
+                    {selectedNode.status === 'draft' && (
                       <Button
                         type="button"
                         onClick={() => void publishCurrentNode()}
                         disabled={busy}
-                        className="text-xs h-8 bg-emerald-600 text-white hover:bg-emerald-700"
+                        className="btn-primary text-xs h-8 inline-flex items-center gap-1.5"
                       >
-                        <Send className="mr-1 h-3.5 w-3.5" /> Publish This Topic
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        onClick={() => void publishCurrentNode()}
-                        disabled={busy}
-                        className="text-xs h-8 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
-                        title="Topic and practice questions are live to students. Click to re-sync."
-                      >
-                        <CheckCircle2 className="mr-1 h-3.5 w-3.5 text-emerald-600" /> Published to Students
+                        <Send className="h-3.5 w-3.5" /> Publish Topic
                       </Button>
                     )}
 
@@ -871,7 +847,7 @@ export const TeacherLearnWorkspace: React.FC<{
                       className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE7EE] bg-white px-3 py-1.5 text-xs font-semibold text-[#111111] hover:bg-[#F4F7F9] transition cursor-pointer"
                     >
                       <Eye className="h-3.5 w-3.5 text-[#71808C]" />
-                      {preview ? 'Exit Student Preview' : 'Student Preview'}
+                      {preview ? 'Exit Preview' : 'Student Preview'}
                     </button>
                   </div>
                 </div>
@@ -965,13 +941,6 @@ export const TeacherLearnWorkspace: React.FC<{
 
                     {/* Actions */}
                     <div className="flex items-center gap-2">
-                      {selectedNode.status === 'published' && (
-                        <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          Live to Students ({nodeActivities.length})
-                        </span>
-                      )}
-
                       <Button
                         type="button"
                         onClick={() => void generateNodePractice()}
@@ -1237,12 +1206,6 @@ export const TeacherLearnWorkspace: React.FC<{
                                 {cfg.edited_by_teacher && (
                                   <span className="rounded bg-sky-50 border border-sky-200 px-1.5 py-0.2 text-3xs font-semibold text-sky-800">
                                     ✏️ Faculty Edited
-                                  </span>
-                                )}
-                                {selectedNode.status === 'published' && (
-                                  <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-3xs font-semibold text-emerald-800 inline-flex items-center gap-1">
-                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                                    Live to Students
                                   </span>
                                 )}
                               </div>
