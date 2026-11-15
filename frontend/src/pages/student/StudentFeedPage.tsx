@@ -256,6 +256,7 @@ export const StudentFeedPage: React.FC = () => {
         onNavigateHome={handleBackToFeed}
         activeTab={activeNavTab}
         onSelectTab={handleNavTabSelect}
+        fullWidthMain={viewMode === 'profile'}
         leftSidebar={
           viewMode !== 'profile' ? (
             <DesktopSidebar

@@ -200,7 +200,7 @@ export const TeacherWorkspacePage: React.FC = () => {
         onNavigateHome={handleBackToFeed}
         activeTab={activeNavTab}
         onSelectTab={handleNavTabSelect}
-        fullWidthMain={isLearnTab}
+        fullWidthMain={isLearnTab || viewMode === 'profile'}
         leftSidebar={
           viewMode !== 'profile' ? (
             <DesktopSidebar

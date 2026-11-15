@@ -41,6 +41,25 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 }) => {
   const { role } = useAuth();
 
+  const hasLeft = Boolean(leftSidebar);
+  const hasRight = Boolean(rightSidebar) && !fullWidthMain;
+
+  let gridCols = 'grid-cols-1';
+  if (hasLeft && hasRight) {
+    gridCols =
+      'grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)_290px] xl:grid-cols-[230px_minmax(0,1fr)_320px] 2xl:grid-cols-[240px_minmax(0,820px)_340px]';
+  } else if (hasLeft && !hasRight) {
+    gridCols =
+      'grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]';
+  } else if (!hasLeft && hasRight) {
+    gridCols =
+      'grid-cols-1 lg:grid-cols-[minmax(0,1fr)_290px] xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,820px)_340px]';
+  } else {
+    gridCols = 'grid-cols-1';
+  }
+
+  const isFullStandalone = !hasLeft && !hasRight;
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
       {/* 1. Universal Top Nav Bar */}
@@ -61,27 +80,29 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
       {/* 3. Universal 3-Column Workspace Grid */}
       <main className={`flex-1 w-full max-w-[1540px] mx-auto px-3 sm:px-6 py-5 sm:py-6 ${className}`}>
-        <div
-          className={`grid grid-cols-1 ${
-            fullWidthMain || !rightSidebar
-              ? 'md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]'
-              : 'md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)_290px] xl:grid-cols-[230px_minmax(0,1fr)_320px] 2xl:grid-cols-[240px_minmax(0,820px)_340px]'
-          } gap-4 lg:gap-5 xl:gap-7 justify-center`}
-        >
+        <div className={`grid ${gridCols} gap-4 lg:gap-5 xl:gap-7 justify-center`}>
           {/* Column 1: Left Sidebar */}
-          {leftSidebar && (
+          {hasLeft && (
             <div className="shrink-0 hidden md:block">
               {leftSidebar}
             </div>
           )}
 
           {/* Column 2: Main Middle Section */}
-          <section className={`min-w-0 ${fullWidthMain ? 'w-full' : 'max-w-[820px] w-full mx-auto md:mx-0'}`}>
+          <section
+            className={`min-w-0 ${
+              isFullStandalone
+                ? 'w-full max-w-[1240px] mx-auto'
+                : fullWidthMain
+                ? 'w-full'
+                : 'max-w-[820px] w-full mx-auto md:mx-0'
+            }`}
+          >
             {children}
           </section>
 
           {/* Column 3: Right Sidebar */}
-          {rightSidebar && (
+          {hasRight && (
             <div className="shrink-0 hidden lg:block">
               {rightSidebar}
             </div>
