@@ -496,7 +496,7 @@ export const TeacherLearnWorkspace: React.FC<{
     try {
       await apiClient.delete(`/api/v1/activities/${activityId}`);
       if (selectedNode) await fetchNodeActivities(selectedNode.id);
-      setMessage('Practice item archived.');
+      setMessage('Question deleted and immediately removed from student practice.');
     } catch {
       setMessage('Could not delete practice question.');
     }
