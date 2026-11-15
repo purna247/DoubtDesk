@@ -445,12 +445,13 @@ async def search_course_materials_rag(
     offering_id: uuid.UUID,
     query: str = Query(..., min_length=2, description="Search query or doubt question"),
     limit: int = Query(3, ge=1, le=10),
+    min_score: float = Query(0.65, ge=0.0, le=1.0, description="Minimum similarity score threshold"),
     user: UserProfile = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> List[RagSearchResultOut]:
     """Semantic RAG search over course lecture slides, notes, and syllabus chunks."""
     from app.modules.sources.embeddings import find_top_k_chunks
-    top_chunks = await find_top_k_chunks(db=db, course_offering_id=offering_id, query=query, top_k=limit)
+    top_chunks = await find_top_k_chunks(db=db, course_offering_id=offering_id, query=query, top_k=limit, min_score=min_score)
     results: List[RagSearchResultOut] = []
     for chunk, score, citation in top_chunks:
         doc = chunk.document

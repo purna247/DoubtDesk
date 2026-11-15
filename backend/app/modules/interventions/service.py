@@ -773,6 +773,11 @@ class InterventionService:
             else "Fundamental principle in the course syllabus."
         )
 
+        # Retrieve grounded course material references via RAG
+        from app.modules.sources.embeddings import find_top_k_chunks
+        rag_chunks = await find_top_k_chunks(db, course_offering_id, name, top_k=2, min_score=0.65)
+        primary_ref = rag_chunks[0][2] if rag_chunks else f"Course syllabus node: {name}"
+
         primer_lines = [
             f"# Remediation Primer: {name}",
             "",
@@ -800,8 +805,16 @@ class InterventionService:
             primer_lines.append("**Key Takeaway**: Maintain clear distinction between high-level conceptual guarantees and implementation edge cases. Work through the base transitions systematically.")
             primer_lines.append("")
 
+        if rag_chunks:
+            primer_lines.append("## 4. Grounded Lecture Slide References")
+            for chunk, _, citation in rag_chunks:
+                snippet = chunk.content_text[:240].replace('\n', ' ').strip()
+                primer_lines.append(f"- 📖 **[{citation}]**: {snippet}...")
+            primer_lines.append("")
+
+        checklist_num = "5" if rag_chunks else "4"
         primer_lines.extend([
-            "## 4. Guided Checklist Before Moving to Practice Items",
+            f"## {checklist_num}. Guided Checklist Before Moving to Practice Items",
             "1. Read the problem statement and identify the governing constraints.",
             "2. State the base cases and preconditions explicitly.",
             "3. Verify that your solution terminates on all valid sub-problem instances.",
@@ -816,6 +829,6 @@ class InterventionService:
             primer_draft=primer_text,
             detected_misconceptions=misconception_descs,
             key_doubt_themes=doubt_titles[:5],
-            recommended_reading=f"Course syllabus node: {name}",
+            recommended_reading=primary_ref,
         )
 

@@ -465,7 +465,7 @@ async def _generate_practice_questions_ai(
     rag_text = ""
     if rag_chunks:
         rag_text = "\n\nVerified Lecture Slides and Course Documents:\n" + "\n".join(
-            f"[{citation}]: {chunk.content_text[:280]}" for chunk, _, citation in rag_chunks
+            f"[{citation}]: {chunk.content_text[:800]}" for chunk, _, citation in rag_chunks
         )
 
     prompt = (

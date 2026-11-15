@@ -17,7 +17,7 @@ from app.modules.sources.models import (
 )
 from app.modules.sources.storage import StorageService
 from app.modules.sources.extractors import DocumentExtractionEngine, ExtractionResult
-from app.modules.sources.embeddings import compute_batch_embeddings
+from app.modules.sources.embeddings import compute_batch_embeddings, invalidate_course_rag_cache
 from app.modules.jobs.service import JobService
 from app.modules.jobs.models import BackgroundJob
 from app.modules.sources.academic_pipeline import process_academic_document
@@ -209,6 +209,7 @@ class SourceService:
         )
 
         await db.commit()
+        invalidate_course_rag_cache()
         await db.refresh(doc)
         return doc, job.id, existing is not None
 
@@ -344,6 +345,7 @@ class SourceService:
             doc.review_status = "approved"
             doc.publication_status = "published"
             await db.commit()
+            invalidate_course_rag_cache()
             await JobService.update_progress(db, job_id, "academic_analysis", 92.0, "Analyzing validated syllabus and examination content.")
             academic_summary = await process_academic_document(db, doc, job_id)
             current_job = await db.get(BackgroundJob, job_id)
@@ -540,6 +542,7 @@ class SourceService:
         if publication_status is not None:
             doc.publication_status = publication_status
         await db.commit()
+        invalidate_course_rag_cache()
         await db.refresh(doc)
         return doc
 
