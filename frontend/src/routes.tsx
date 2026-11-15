@@ -1,31 +1,90 @@
-import React from 'react';
-import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
-import { AppHeader } from './components/layout/AppHeader';
+import React, { Suspense, lazy } from 'react';
+import { Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { AppLayout } from './components/layout/AppLayout';
 import { StaffSidebar } from './components/layout/StaffSidebar';
+import { AdminRightSidebar } from './components/sidebar/AdminRightSidebar';
+import { SuperAdminRightSidebar } from './components/sidebar/SuperAdminRightSidebar';
 import { LoginPage } from './pages/auth/LoginPage';
 import { MFAPage } from './pages/auth/MFAPage';
 import { PasswordRecoveryPage } from './pages/auth/PasswordRecoveryPage';
 import { StudentFeedPage } from './pages/student/StudentFeedPage';
-import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
-import { SuperAdminDashboardPage } from './pages/superadmin/SuperAdminDashboardPage';
 import { useAuth } from './contexts/AuthContext';
 
-const MaterialsRoute: React.FC = () => {
+// Dynamic code-splitting for heavy role-specific workspaces (Vercel React Best Practice: bundle-dynamic-imports)
+const TeacherWorkspacePage = lazy(() =>
+  import('./pages/teacher/TeacherWorkspacePage').then((m) => ({ default: m.TeacherWorkspacePage }))
+);
+const AdminDashboardPage = lazy(() =>
+  import('./pages/admin/AdminDashboardPage').then((m) => ({ default: m.AdminDashboardPage }))
+);
+const SuperAdminDashboardPage = lazy(() =>
+  import('./pages/superadmin/SuperAdminDashboardPage').then((m) => ({ default: m.SuperAdminDashboardPage }))
+);
+
+const LoadingSpinner: React.FC = () => (
+  <div className="min-h-screen flex items-center justify-center bg-slate-50">
+    <div className="w-8 h-8 border-3 border-[#0A8FF5] border-t-transparent rounded-full animate-spin"></div>
+  </div>
+);
+
+// Unified Academic Route: Dispatches to TeacherWorkspacePage for faculty and StudentFeedPage for students
+const AcademicRoute: React.FC = () => {
+  const { role, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <LoadingSpinner />;
+  }
+
+  if (role === 'TEACHER') {
+    return (
+      <Suspense fallback={<LoadingSpinner />}>
+        <TeacherWorkspacePage />
+      </Suspense>
+    );
+  }
+
   return <StudentFeedPage />;
 };
 
-// Dedicated Layout for Faculty, Institution Admin, and Platform Governance
+// Common Layout for Institution Admin and Platform Governance
 const StaffLayout: React.FC = () => {
+  const { role } = useAuth();
+  const location = useLocation();
+
+  const activeTab = location.pathname.includes('/admin/academic/units')
+    ? 'units'
+    : location.pathname.includes('/admin/academic/subjects')
+    ? 'subjects'
+    : location.pathname.includes('/admin/curriculum')
+    ? 'curriculum'
+    : location.pathname.includes('/admin/offerings')
+    ? 'offerings'
+    : location.pathname.includes('/admin/moderation')
+    ? 'moderation'
+    : location.pathname.includes('/super-admin/institutions')
+    ? 'institutions'
+    : location.pathname.includes('/super-admin/pipeline')
+    ? 'pipeline'
+    : location.pathname.includes('/super-admin/audit')
+    ? 'audit'
+    : 'dashboard';
+
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
-      <AppHeader />
-      <div className="flex-1 flex max-w-7xl w-full mx-auto">
-        <StaffSidebar />
-        <main className="flex-1 p-4 lg:p-8 overflow-y-auto">
-          <Outlet />
-        </main>
-      </div>
-    </div>
+    <AppLayout
+      activeTab={activeTab}
+      leftSidebar={<StaffSidebar />}
+      rightSidebar={
+        role === 'SUPER_ADMIN' ? (
+          <SuperAdminRightSidebar />
+        ) : (
+          <AdminRightSidebar />
+        )
+      }
+    >
+      <Suspense fallback={<LoadingSpinner />}>
+        <Outlet />
+      </Suspense>
+    </AppLayout>
   );
 };
 
@@ -56,20 +115,20 @@ export const AppRoutes: React.FC = () => {
       <Route path="/forgot-password" element={<PasswordRecoveryPage />} />
       <Route path="/reset-password" element={<PasswordRecoveryPage />} />
 
-      {/* Student Community Experience (Self-Contained 3-Column Layout from Prototype) */}
-      <Route path="/doubts" element={<StudentFeedPage />} />
-      <Route path="/courses" element={<StudentFeedPage />} />
-      <Route path="/quiz" element={<StudentFeedPage />} />
-      <Route path="/pyq" element={<StudentFeedPage />} />
-      <Route path="/materials" element={<MaterialsRoute />} />
+      {/* Unified Academic Experience (Student & Teacher with Common 3-Column Layout) */}
+      <Route path="/doubts" element={<AcademicRoute />} />
+      <Route path="/courses" element={<AcademicRoute />} />
+      <Route path="/quiz" element={<AcademicRoute />} />
+      <Route path="/pyq" element={<AcademicRoute />} />
+      <Route path="/materials" element={<AcademicRoute />} />
       <Route path="/course-doubts" element={<Navigate to="/doubts" replace />} />
-      <Route path="/analytics" element={<StudentFeedPage />} />
-      <Route path="/profile" element={<StudentFeedPage />} />
+      <Route path="/analytics" element={<AcademicRoute />} />
+      <Route path="/profile" element={<AcademicRoute />} />
 
-      {/* Legacy Teacher Routes Redirect to Unified 3-Column Doubts Workspace */}
+      {/* Legacy Teacher Routes Redirect to Unified Doubts Workspace */}
       <Route path="/teacher/*" element={<Navigate to="/doubts" replace />} />
 
-      {/* Staff & Administration Studio Layout */}
+      {/* Staff & Administration Studio Layout with Common 3-Column Layout */}
       <Route element={<StaffLayout />}>
         {/* Admin Routes */}
         <Route path="/admin/dashboard" element={<AdminDashboardPage />} />

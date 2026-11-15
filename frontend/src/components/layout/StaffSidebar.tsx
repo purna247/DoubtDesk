@@ -16,70 +16,84 @@ export const StaffSidebar: React.FC = () => {
   const { role } = useAuth();
 
   const navItemClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+    `flex items-center gap-3 w-full h-[40px] px-3 rounded-full transition-colors cursor-pointer text-left ${
       isActive
-        ? 'bg-[#111111] text-white shadow-sm'
-        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+        ? 'bg-[#EBF2F7] text-[#111111] font-bold shadow-xs'
+        : 'text-[#2D3748] hover:bg-[#F4F7F9] font-medium'
     }`;
 
   const renderAdminLinks = () => (
     <>
-      <div className="px-3 pb-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-        Institution Admin
+      <h2 className="text-[14px] font-extrabold text-[#111111] mb-2 px-3 uppercase tracking-wide">
+        Administration
+      </h2>
+      <div className="flex flex-col gap-0.5">
+        <NavLink to="/admin/dashboard" className={navItemClass}>
+          <LayoutDashboard className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Overview</span>
+        </NavLink>
+        <NavLink to="/admin/academic/units" className={navItemClass}>
+          <FolderGit2 className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Academic Units</span>
+        </NavLink>
+        <NavLink to="/admin/academic/subjects" className={navItemClass}>
+          <BookOpen className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Canonical Subjects</span>
+        </NavLink>
+        <NavLink to="/admin/curriculum/subjects" className={navItemClass}>
+          <FileText className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Curriculum Schemes</span>
+        </NavLink>
+        <NavLink to="/admin/offerings" className={navItemClass}>
+          <Server className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Course Offerings</span>
+        </NavLink>
+        <NavLink to="/admin/moderation" className={navItemClass}>
+          <ShieldCheck className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Moderation & Audit</span>
+        </NavLink>
       </div>
-      <NavLink to="/admin/dashboard" className={navItemClass}>
-        <LayoutDashboard className="w-4 h-4" /> Institution Overview
-      </NavLink>
-      <NavLink to="/admin/academic/units" className={navItemClass}>
-        <FolderGit2 className="w-4 h-4" /> Academic Units
-      </NavLink>
-      <NavLink to="/admin/academic/subjects" className={navItemClass}>
-        <BookOpen className="w-4 h-4" /> Canonical Subjects
-      </NavLink>
-      <NavLink to="/admin/curriculum/subjects" className={navItemClass}>
-        <FileText className="w-4 h-4" /> Curriculum Schemes
-      </NavLink>
-      <NavLink to="/admin/offerings" className={navItemClass}>
-        <Server className="w-4 h-4" /> Course Offerings
-      </NavLink>
-      <NavLink to="/admin/moderation" className={navItemClass}>
-        <ShieldCheck className="w-4 h-4" /> Moderation & Audit
-      </NavLink>
     </>
   );
 
   const renderSuperAdminLinks = () => (
     <>
-      <div className="px-3 pb-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-        Platform Governance
+      <h2 className="text-[14px] font-extrabold text-[#111111] mb-2 px-3 uppercase tracking-wide">
+        Governance
+      </h2>
+      <div className="flex flex-col gap-0.5">
+        <NavLink to="/super-admin/dashboard" className={navItemClass}>
+          <LayoutDashboard className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Overview</span>
+        </NavLink>
+        <NavLink to="/super-admin/institutions" className={navItemClass}>
+          <Server className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Institutions</span>
+        </NavLink>
+        <NavLink to="/super-admin/pipeline" className={navItemClass}>
+          <BrainCircuit className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">AI Pipelines</span>
+        </NavLink>
+        <NavLink to="/super-admin/audit" className={navItemClass}>
+          <ShieldCheck className="w-4 h-4 text-[#111111] shrink-0" />
+          <span className="text-[13px] truncate">Security Audit</span>
+        </NavLink>
       </div>
-      <NavLink to="/super-admin/dashboard" className={navItemClass}>
-        <LayoutDashboard className="w-4 h-4" /> Platform Overview
-      </NavLink>
-      <NavLink to="/super-admin/institutions" className={navItemClass}>
-        <Server className="w-4 h-4" /> Institutions
-      </NavLink>
-      <NavLink to="/super-admin/pipeline" className={navItemClass}>
-        <BrainCircuit className="w-4 h-4" /> AI Pipelines
-      </NavLink>
-      <NavLink to="/super-admin/audit" className={navItemClass}>
-        <ShieldCheck className="w-4 h-4" /> Security Audit
-      </NavLink>
     </>
   );
 
   return (
-    <aside className="w-64 border-r border-[#DCE7EE] bg-white min-h-[calc(100vh-57px)] p-4 flex flex-col justify-between hidden md:flex shrink-0">
-      <nav className="flex flex-col space-y-1">
+    <aside className="w-[190px] xl:w-[210px] 2xl:w-[220px] shrink-0 hidden md:block">
+      <nav className="flex flex-col space-y-4">
         {role === 'SUPER_ADMIN' && renderSuperAdminLinks()}
         {role === 'ADMIN' && renderAdminLinks()}
         {(role === 'STUDENT' || role === 'TEACHER') && (
           <NavLink to="/doubts" className={navItemClass}>
-            <MessageSquare className="w-4 h-4" /> Doubts Feed
+            <MessageSquare className="w-4 h-4 text-[#111111] shrink-0" />
+            <span className="text-[13px] truncate">Doubts Feed</span>
           </NavLink>
         )}
       </nav>
     </aside>
   );
 };
-
