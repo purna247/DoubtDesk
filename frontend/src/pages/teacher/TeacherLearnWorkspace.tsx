@@ -286,7 +286,7 @@ export const TeacherLearnWorkspace: React.FC<{
         },
       });
 
-      setMessage('Practice question updated successfully.');
+      setMessage('Practice question updated and live for students!');
       setEditingActivityId(null);
       setEditForm(null);
       if (selectedNode) await fetchNodeActivities(selectedNode.id);
@@ -461,7 +461,7 @@ export const TeacherLearnWorkspace: React.FC<{
         {}
       );
       setNodeActivities(Array.isArray(generated) ? generated : []);
-      setMessage(`Successfully generated ${generated.length} practice questions from materials for "${selectedNode.title}".`);
+      setMessage(`Successfully generated ${generated.length} practice questions — published & live for students!`);
     } catch (err: unknown) {
       setMessage(err instanceof Error ? err.message : 'Practice questions could not be generated.');
     } finally {
@@ -599,6 +599,7 @@ export const TeacherLearnWorkspace: React.FC<{
       setAuthorHint('');
       setAuthorExplanation('');
       setAuthorCitation('');
+      setMessage('Practice question authored and published to students!');
       await fetchNodeActivities(selectedNode.id);
       setActiveTab('questions'); // Return directly to practice bank tab
     } catch (err: unknown) {
@@ -843,7 +844,7 @@ export const TeacherLearnWorkspace: React.FC<{
 
                   {/* Header Actions */}
                   <div className="flex items-center gap-2">
-                    {selectedNode.status === 'draft' && (
+                    {selectedNode.status === 'draft' ? (
                       <Button
                         type="button"
                         onClick={() => void publishCurrentNode()}
@@ -851,6 +852,16 @@ export const TeacherLearnWorkspace: React.FC<{
                         className="text-xs h-8 bg-emerald-600 text-white hover:bg-emerald-700"
                       >
                         <Send className="mr-1 h-3.5 w-3.5" /> Publish This Topic
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        onClick={() => void publishCurrentNode()}
+                        disabled={busy}
+                        className="text-xs h-8 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                        title="Topic and practice questions are live to students. Click to re-sync."
+                      >
+                        <CheckCircle2 className="mr-1 h-3.5 w-3.5 text-emerald-600" /> Published to Students
                       </Button>
                     )}
 
@@ -954,6 +965,13 @@ export const TeacherLearnWorkspace: React.FC<{
 
                     {/* Actions */}
                     <div className="flex items-center gap-2">
+                      {selectedNode.status === 'published' && (
+                        <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Live to Students ({nodeActivities.length})
+                        </span>
+                      )}
+
                       <Button
                         type="button"
                         onClick={() => void generateNodePractice()}
@@ -1219,6 +1237,12 @@ export const TeacherLearnWorkspace: React.FC<{
                                 {cfg.edited_by_teacher && (
                                   <span className="rounded bg-sky-50 border border-sky-200 px-1.5 py-0.2 text-3xs font-semibold text-sky-800">
                                     ✏️ Faculty Edited
+                                  </span>
+                                )}
+                                {selectedNode.status === 'published' && (
+                                  <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-3xs font-semibold text-emerald-800 inline-flex items-center gap-1">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    Live to Students
                                   </span>
                                 )}
                               </div>
