@@ -6,11 +6,9 @@ import {
   FileText,
   LayoutDashboard,
   BrainCircuit,
-  BarChart2,
   FolderGit2,
   ShieldCheck,
   Server,
-  Award,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -23,29 +21,6 @@ export const StaffSidebar: React.FC = () => {
         ? 'bg-[#111111] text-white shadow-sm'
         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
     }`;
-
-  const renderTeacherLinks = () => (
-    <>
-      <div className="px-3 pb-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-        Faculty Studio
-      </div>
-      <NavLink to="/teacher/dashboard" className={navItemClass}>
-        <LayoutDashboard className="w-4 h-4" /> Overview & Gaps
-      </NavLink>
-      <NavLink to="/teacher/courses" className={navItemClass}>
-        <BrainCircuit className="w-4 h-4" /> Course Studio
-      </NavLink>
-      <NavLink to="/teacher/quizzes" className={navItemClass}>
-        <Award className="w-4 h-4" /> Quiz Studio
-      </NavLink>
-      <NavLink to="/teacher/analytics" className={navItemClass}>
-        <BarChart2 className="w-4 h-4" /> Concept Analytics
-      </NavLink>
-      <NavLink to="/teacher/dashboard?tab=doubts" className={navItemClass}>
-        <MessageSquare className="w-4 h-4" /> Course Doubts
-      </NavLink>
-    </>
-  );
 
   const renderAdminLinks = () => (
     <>
@@ -98,10 +73,9 @@ export const StaffSidebar: React.FC = () => {
       <nav className="flex flex-col space-y-1">
         {role === 'SUPER_ADMIN' && renderSuperAdminLinks()}
         {role === 'ADMIN' && renderAdminLinks()}
-        {role === 'TEACHER' && renderTeacherLinks()}
-        {role === 'STUDENT' && (
+        {(role === 'STUDENT' || role === 'TEACHER') && (
           <NavLink to="/doubts" className={navItemClass}>
-            <MessageSquare className="w-4 h-4" /> Back to Doubts Feed
+            <MessageSquare className="w-4 h-4" /> Doubts Feed
           </NavLink>
         )}
       </nav>

@@ -85,7 +85,7 @@ async def login(
         if profile.role == "ADMIN":
             primary_route = "/admin/dashboard"
         elif profile.role == "TEACHER":
-            primary_route = "/teacher/dashboard"
+            primary_route = "/doubts"
 
     return LoginResponse(
         success=True,

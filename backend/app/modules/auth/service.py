@@ -473,7 +473,7 @@ class AuthService:
             route = "/admin/dashboard"
         elif "teacher" in role_codes:
             role = "TEACHER"
-            route = "/teacher/dashboard"
+            route = "/doubts"
         elif "student" in role_codes:
             role = "STUDENT"
             route = "/doubts"

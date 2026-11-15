@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AppHeader } from './components/layout/AppHeader';
 import { StaffSidebar } from './components/layout/StaffSidebar';
@@ -6,48 +6,12 @@ import { LoginPage } from './pages/auth/LoginPage';
 import { MFAPage } from './pages/auth/MFAPage';
 import { PasswordRecoveryPage } from './pages/auth/PasswordRecoveryPage';
 import { StudentFeedPage } from './pages/student/StudentFeedPage';
-import { TeacherDashboardPage } from './pages/teacher/TeacherDashboardPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { SuperAdminDashboardPage } from './pages/superadmin/SuperAdminDashboardPage';
-import { QuizView } from './components/academic/QuizView';
-import { ToastNotification } from './components/ui/ToastNotification';
-import { apiClient } from './api/client';
-import type { CourseOffering } from './types/academics';
 import { useAuth } from './contexts/AuthContext';
 
 const MaterialsRoute: React.FC = () => {
   return <StudentFeedPage />;
-};
-
-const TeacherQuizzesRoute: React.FC = () => {
-  const [offerings, setOfferings] = useState<CourseOffering[]>([]);
-  const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiClient
-      .get<CourseOffering[]>('/api/v1/academics/teacher/offerings')
-      .then((rows) => {
-        if (!cancelled) setOfferings(Array.isArray(rows) ? rows : []);
-      })
-      .catch(() => {
-        if (!cancelled) setOfferings([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div className="space-y-5">
-      <header>
-        <p className="text-xs font-bold uppercase tracking-wide text-[#0A8FF5]">Faculty studio</p>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">Quizzes &amp; Assessments</h1>
-      </header>
-      <QuizView offerings={offerings} onShowToast={setToast} />
-      <ToastNotification message={toast} onClose={() => setToast(null)} />
-    </div>
-  );
 };
 
 // Dedicated Layout for Faculty, Institution Admin, and Platform Governance
@@ -102,14 +66,11 @@ export const AppRoutes: React.FC = () => {
       <Route path="/analytics" element={<StudentFeedPage />} />
       <Route path="/profile" element={<StudentFeedPage />} />
 
+      {/* Legacy Teacher Routes Redirect to Unified 3-Column Doubts Workspace */}
+      <Route path="/teacher/*" element={<Navigate to="/doubts" replace />} />
+
       {/* Staff & Administration Studio Layout */}
       <Route element={<StaffLayout />}>
-        {/* Teacher Routes */}
-        <Route path="/teacher/dashboard" element={<TeacherDashboardPage />} />
-        <Route path="/teacher/courses" element={<TeacherDashboardPage />} />
-        <Route path="/teacher/quizzes" element={<TeacherQuizzesRoute />} />
-        <Route path="/teacher/analytics" element={<TeacherDashboardPage />} />
-
         {/* Admin Routes */}
         <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
         <Route path="/admin/academic/units" element={<AdminDashboardPage />} />
