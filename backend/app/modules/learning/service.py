@@ -646,6 +646,9 @@ class LearningService:
         if not v or v.institution_id != tenant_id:
             raise AppException(status_code=404, code="ACTIVITY_NOT_FOUND", message="Activity version not found.")
 
+        if (v.scoring_config_json or {}).get("assessment_type", "").startswith("intervention_"):
+            raise AppException(status_code=403, code="ASSESSMENT_ACTIVITY_RESTRICTED", message="Complete intervention questions through the assigned assessment.")
+
         return evaluate_activity_response(
             activity_type=v.activity_type,
             response_data=response_data,

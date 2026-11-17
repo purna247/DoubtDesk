@@ -433,7 +433,7 @@ async def list_node_activities_student(
     stmt = (
         select(Activity)
         .options(selectinload(Activity.versions))
-        .where(Activity.learning_node_id == node_id, Activity.institution_id == tenant_id)
+        .where(Activity.learning_node_id == node_id, Activity.institution_id == tenant_id, Activity.status == "active")
     )
     activities = (await db.execute(stmt)).scalars().all()
     results: List[ActivityOut] = []

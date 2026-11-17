@@ -129,7 +129,7 @@ export function InterventionAuthoringPanel({ offeringId, conceptId, conceptName,
     </label>
   );
 
-  return <fieldset disabled={!!busy || assigned} className="space-y-5 border-t border-slate-200 pt-5 disabled:opacity-75">
+  return <><fieldset disabled={!!busy || assigned} className="space-y-5 border-t border-slate-200 pt-5 disabled:opacity-75">
     <div><h3 className="text-lg font-bold text-slate-900">Prepare targeted support</h3><p className="mt-1 text-sm text-slate-500">Review and edit the whole intervention here, then approve it for {studentIds.length} selected student(s).</p></div>
     <div className="flex flex-wrap gap-2" aria-label="Authoring method">
       <button type="button" aria-pressed={mode === 'draft'} className={`rounded-lg px-3 py-2 text-sm ${mode === 'draft' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100'}`} onClick={() => { setMode('draft'); setAssigned(false); }}>Generate or write questions</button>
@@ -154,5 +154,7 @@ export function InterventionAuthoringPanel({ offeringId, conceptId, conceptName,
     {!studentIds.length && <p className="text-sm text-amber-800">Select students with confirmed weakness evidence to assign this intervention.</p>}
     <button type="button" onClick={() => void approve()} disabled={!!issue || !studentIds.length} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy === 'save' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Approve and assign ({studentIds.length})</button>
     {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
-  </fieldset>;
+  </fieldset>
+    {assigned && <button type="button" className="mt-4 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700" onClick={() => { setAssigned(false); setMessage('Select students, review the draft and approve the next intervention.'); }}>Prepare another intervention</button>}
+  </>;
 }

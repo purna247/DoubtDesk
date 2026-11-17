@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Set
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -10,6 +10,7 @@ from app.common.exceptions import AppException
 from app.modules.academics.models import CourseOfferingFaculty, CourseOfferingEnrolment
 from app.modules.auth.models import User, InstitutionMembership
 from app.modules.knowledge.models import Concept
+from app.modules.learning.models import Activity
 from app.modules.assessments.models import (
     Assessment,
     AssessmentVersion,
@@ -165,6 +166,7 @@ class InterventionService:
             "cognitive_counts": cognitive_counts,
             "item_types": item_types,
             "total_marks": round(total_marks, 2),
+            "activity_versions": [item.activity_version for item in version.items if item.activity_version],
         }
 
     @staticmethod
@@ -276,6 +278,18 @@ class InterventionService:
                 code="MISSING_PHASE_B_REQUIRED_COUNT",
                 message="phase_b_required_count is required when completion rule is 'minimum_count'.",
             )
+
+        # Reserve existing assessment activities too, so general practice cannot reveal their answers.
+        reserved_activity_ids = set()
+        for profile, assessment_type in ((phase_a_profile, "intervention_baseline"),
+                                         (phase_b_profile, "intervention_practice"),
+                                         (phase_c_profile, "intervention_post")):
+            if profile:
+                for activity_version in profile["activity_versions"]:
+                    activity_version.scoring_config_json = {**(activity_version.scoring_config_json or {}), "assessment_type": assessment_type}
+                    reserved_activity_ids.add(activity_version.activity_id)
+        if reserved_activity_ids:
+            await db.execute(update(Activity).where(Activity.id.in_(reserved_activity_ids), Activity.institution_id == tenant_id).values(status="assessment_only"))
 
         now = datetime.now(timezone.utc)
         intervention = Intervention(

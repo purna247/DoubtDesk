@@ -45,8 +45,8 @@ class InterventionDraft(BaseModel):
 
     @model_validator(mode="after")
     def validate_matched_pair(self):
-        if not self.title.strip() or not self.study_guide.strip():
-            raise ValueError("Title and study guide are required.")
+        if len(self.title.strip()) < 3 or not self.study_guide.strip():
+            raise ValueError("A title of at least 3 characters and a study guide are required.")
         def profile(questions):
             return Counter((q.marks, q.difficulty_level, q.cognitive_level) for q in questions)
         if profile(self.baseline) != profile(self.reassessment):

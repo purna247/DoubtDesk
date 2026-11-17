@@ -5,7 +5,7 @@ from uuid import UUID
 
 import httpx
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.exceptions import AppException
@@ -36,8 +36,8 @@ async def verify_concept(db: AsyncSession, tenant_id: UUID, offering_id: UUID, c
     return concept
 
 
-async def reviewed_chunks(db: AsyncSession, tenant_id: UUID, offering_id: UUID):
-    return (await db.execute(
+async def reviewed_chunks(db: AsyncSession, tenant_id: UUID, offering_id: UUID, chunk_ids: set[UUID] | None = None, search_terms: set[str] | None = None):
+    stmt = (
         select(SourceChunk, SourceDocument)
         .join(SourceDocument, SourceDocument.id == SourceChunk.source_document_id)
         .join(SourceDocumentCourseOffering, SourceDocumentCourseOffering.source_document_id == SourceDocument.id)
@@ -45,8 +45,15 @@ async def reviewed_chunks(db: AsyncSession, tenant_id: UUID, offering_id: UUID):
                SourceDocumentCourseOffering.course_offering_id == offering_id,
                SourceDocument.status == "processed", SourceDocument.review_status == "approved",
                SourceDocument.publication_status != "rejected")
-        .order_by(SourceChunk.created_at.desc(), SourceChunk.chunk_index.asc()).limit(1000)
-    )).all()
+        .order_by(SourceChunk.created_at.desc(), SourceChunk.chunk_index.asc())
+    )
+    if search_terms:
+        stmt = stmt.where(or_(*(func.lower(SourceChunk.content_text).contains(term, autoescape=True) for term in search_terms)))
+    if chunk_ids is None:
+        stmt = stmt.limit(1000)
+    else:
+        stmt = stmt.where(SourceChunk.id.in_(chunk_ids))
+    return (await db.execute(stmt)).all()
 
 
 async def request_ai_json(prompt: str) -> dict:
@@ -85,8 +92,8 @@ async def request_ai_json(prompt: str) -> dict:
 
 async def generate_draft(db: AsyncSession, tenant_id: UUID, offering_id: UUID, req: GenerateInterventionRequest) -> InterventionDraft:
     concept = await verify_concept(db, tenant_id, offering_id, req.concept_id)
-    rows = await reviewed_chunks(db, tenant_id, offering_id)
     terms = set(re.findall(r"\w{3,}", concept.canonical_name.casefold()))
+    rows = await reviewed_chunks(db, tenant_id, offering_id, search_terms=terms)
     ranked = sorted(rows, key=lambda row: sum(term in (row[0].content_text or "").casefold() for term in terms), reverse=True)
     selected = [row for row in ranked if (row[0].content_text or "").strip() and any(term in row[0].content_text.casefold() for term in terms)][:8]
     if not selected:
@@ -142,7 +149,8 @@ async def generate_draft(db: AsyncSession, tenant_id: UUID, offering_id: UUID, r
 async def approve_draft(db: AsyncSession, tenant_id: UUID, offering_id: UUID, user_id: UUID, req: ApproveInterventionDraft):
     await verify_concept(db, tenant_id, offering_id, req.concept_id)
     # Validate references again after teacher edits. Manual questions can omit references.
-    allowed = {chunk.id for chunk, _ in await reviewed_chunks(db, tenant_id, offering_id)}
+    requested = {source_id for q in req.baseline + req.reassessment + req.practice for source_id in q.source_chunk_ids}
+    allowed = {chunk.id for chunk, _ in await reviewed_chunks(db, tenant_id, offering_id, requested)}
     for question in req.baseline + req.reassessment + req.practice:
         if not set(question.source_chunk_ids) <= allowed:
             raise AppException(status_code=400, code="INVALID_QUIZ_SOURCE_REFERENCE", message="Questions must reference approved material from this course.")

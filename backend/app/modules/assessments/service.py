@@ -1246,7 +1246,7 @@ class AssessmentService:
                 institution_id=tenant_id,
                 learning_node_id=node.id,
                 created_by_user_id=user_id,
-                status="active",
+                status="assessment_only" if data.assessment_type.startswith("intervention_") else "active",
             )
             db.add(activity)
             await db.flush()
@@ -1264,6 +1264,7 @@ class AssessmentService:
                     "max_marks": float(q_in.marks),
                     "negative_marks": 0.0,
                     "origin_type": q_in.origin_type,
+                    "assessment_type": data.assessment_type,
                     "difficulty_level": q_in.difficulty_level,
                     "cognitive_level": q_in.cognitive_level,
                     "source_chunk_ids": [str(source_id) for source_id in q_in.source_chunk_ids],

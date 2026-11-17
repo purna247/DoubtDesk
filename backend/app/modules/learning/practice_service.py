@@ -1004,6 +1004,10 @@ class AdaptivePracticeService:
         act_v = await db.get(ActivityVersion, data.activity_version_id)
         if not act_v or act_v.institution_id != tenant_id:
             raise AppException(status_code=404, code="ACTIVITY_NOT_FOUND", message="Question not found.")
+        if (act_v.scoring_config_json or {}).get("assessment_type", "").startswith("intervention_"):
+            raise AppException(status_code=403, code="ASSESSMENT_ACTIVITY_RESTRICTED", message="Complete intervention questions through the assigned assessment.")
+        if session.current_activity_version_id != data.activity_version_id:
+            raise AppException(status_code=409, code="PRACTICE_QUESTION_MISMATCH", message="Answer the current question in this practice session.")
 
         node = await db.get(LearningNode, session.learning_node_id)
         pool = await _load_node_mcq_versions(db, session.learning_node_id)
