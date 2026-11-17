@@ -51,8 +51,61 @@ export interface Assessment {
   title: string;
   description?: string | null;
   status: string;
+  is_formal_quiz?: boolean;
+  scheduled_start_at?: string | null;
+  scheduled_end_at?: string | null;
+  shuffle_questions?: boolean;
+  shuffle_options?: boolean;
+  is_finalized?: boolean;
+  finalized_at?: string | null;
+  finalized_by_user_id?: string | null;
   created_at: string;
   latest_version?: AssessmentVersion | null;
+}
+
+export interface StudentOverrideOut {
+  id: string;
+  student_membership_id: string;
+  override_type: string;
+  status: string;
+  start_at?: string | null;
+  end_at?: string | null;
+  reason: string;
+  created_at: string;
+}
+
+export interface RosterStudentResult {
+  student_membership_id: string;
+  student_user_id?: string | null;
+  full_name: string;
+  registration_number?: string | null;
+  roll_number?: string | null;
+  email?: string | null;
+  status: 'submitted' | 'not_attempted' | 'absent' | 'makeup_pending';
+  attempt_id?: string | null;
+  attempt_number?: number | null;
+  started_at?: string | null;
+  submitted_at?: string | null;
+  raw_marks_awarded?: number | null;
+  faculty_override_marks?: number | null;
+  effective_marks?: number | null;
+  marks_available: number;
+  override_reason?: string | null;
+  active_makeup?: StudentOverrideOut | null;
+}
+
+export interface FormalQuizRosterSummary {
+  quiz_id: string;
+  quiz_title: string;
+  course_offering_id: string;
+  is_finalized: boolean;
+  finalized_at?: string | null;
+  total_enrolled: number;
+  total_submitted: number;
+  total_absent: number;
+  total_makeup_pending: number;
+  total_not_attempted: number;
+  students: RosterStudentResult[];
 }
 
 export interface StartAttemptResponse {

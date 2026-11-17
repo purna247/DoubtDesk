@@ -57,6 +57,16 @@ class Assessment(Base):
 
     # Relationships
     offering: Mapped["app.modules.academics.models.CourseOffering"] = relationship("app.modules.academics.models.CourseOffering")
+    is_formal_quiz: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    scheduled_start_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_end_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    shuffle_questions: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    shuffle_options: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_finalized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    finalized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalized_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     versions: Mapped[List["AssessmentVersion"]] = relationship(
         "AssessmentVersion", back_populates="assessment", cascade="all, delete-orphan", order_by="AssessmentVersion.version_number.desc()"
     )
@@ -229,6 +239,11 @@ class AssessmentAttempt(Base):
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     scoring_policy_snapshot: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     invalid_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    faculty_override_marks: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    override_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    override_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -436,4 +451,51 @@ class StudentLearningNodeProgress(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class AssessmentStudentOverride(Base):
+    """
+    Individual student access schedule overrides, makeup exam authorizations,
+    and confirmed absence records for formal assessments.
+    """
+    __tablename__ = "assessment_student_overrides"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    institution_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    student_membership_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("institution_memberships.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    override_type: Mapped[str] = mapped_column(
+        String(30), default="makeup_window", nullable=False
+    )  # makeup_window | confirmed_absence
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", nullable=False
+    )  # active | used | superseded | revoked | confirmed
+    start_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    granted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resulting_attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("assessment_attempts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    assessment: Mapped["Assessment"] = relationship("Assessment")
+    student_membership: Mapped["app.modules.auth.models.InstitutionMembership"] = relationship("app.modules.auth.models.InstitutionMembership")
+    resulting_attempt: Mapped[Optional["AssessmentAttempt"]] = relationship("AssessmentAttempt")
 

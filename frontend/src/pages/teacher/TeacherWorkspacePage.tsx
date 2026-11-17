@@ -10,7 +10,7 @@ import { ProfilePage } from '../../components/profile/ProfilePage';
 import { ToastNotification } from '../../components/ui/ToastNotification';
 import { TeacherLearnWorkspace } from './TeacherLearnWorkspace';
 import { TeacherMaterialsPage } from './TeacherMaterialsPage';
-import { TeacherAnalyticsPage } from './TeacherAnalyticsPage';
+import { TeacherAnalyticsPage, type CreateAssessmentIntent } from './TeacherAnalyticsPage';
 import { QuizView } from '../../components/academic/QuizView';
 import { PYQView } from '../../components/academic/PYQView';
 import { useAuth } from '../../contexts/AuthContext';
@@ -59,6 +59,7 @@ export const TeacherWorkspacePage: React.FC = () => {
   const [viewMode, setViewMode] = useState<'feed' | 'post' | 'profile'>('feed');
   const [activeDoubtId, setActiveDoubtId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [quizBuilderPrefill, setQuizBuilderPrefill] = useState<CreateAssessmentIntent | null>(null);
 
   const showToast = (msg: string) => setToastMessage(msg);
 
@@ -275,13 +276,25 @@ export const TeacherWorkspacePage: React.FC = () => {
         ) : activeNavTab === 'learn' ? (
           <TeacherLearnWorkspace offerings={offerings} selectedSubject={selectedSubject} />
         ) : activeNavTab === 'quiz' ? (
-          <QuizView offerings={offerings} selectedSubject={selectedSubject} onShowToast={showToast} />
+          <QuizView
+            offerings={offerings}
+            selectedSubject={selectedSubject}
+            onShowToast={showToast}
+            initialBuilderState={quizBuilderPrefill}
+            onClearInitialBuilderState={() => setQuizBuilderPrefill(null)}
+          />
         ) : activeNavTab === 'pyq' ? (
           <PYQView selectedSubject={selectedSubject} />
         ) : activeNavTab === 'studymaterial' ? (
           <TeacherMaterialsPage embedded />
         ) : activeNavTab === 'teacher_analytics' ? (
-          <TeacherAnalyticsPage offerings={offerings} />
+          <TeacherAnalyticsPage
+            offerings={offerings}
+            onCreateAssessment={(intent) => {
+              setQuizBuilderPrefill(intent);
+              handleNavTabSelect('quiz');
+            }}
+          />
         ) : (
           <>
             <FeedFilters

@@ -76,5 +76,16 @@ export const apiClient = {
       body: body instanceof FormData ? body : JSON.stringify(body),
     }),
   delete: <T>(endpoint: string) => request<T>(endpoint, { method: 'DELETE' }),
+  getBlob: async (endpoint: string): Promise<Blob> => {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to download file (${response.status})`);
+    }
+    return response.blob();
+  },
 };
 

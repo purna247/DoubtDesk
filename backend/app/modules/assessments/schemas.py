@@ -102,6 +102,13 @@ class AssessmentOut(BaseModel):
     title: str
     description: Optional[str] = None
     status: str
+    is_formal_quiz: bool = False
+    scheduled_start_at: Optional[datetime] = None
+    scheduled_end_at: Optional[datetime] = None
+    shuffle_questions: bool = False
+    shuffle_options: bool = False
+    is_finalized: bool = False
+    finalized_at: Optional[datetime] = None
     created_at: datetime
     latest_version: Optional[AssessmentVersionOut] = None
 
@@ -178,8 +185,9 @@ class QuizQuestionIn(BaseModel):
 class QuizCreateRequest(BaseModel):
     title: str = Field(..., min_length=2, max_length=255)
     description: Optional[str] = None
-    time_limit_minutes: int = Field(15, ge=1, le=300)
+    time_limit_minutes: Optional[int] = Field(None, ge=1, le=300)
     publish: bool = True
+    assessment_type: str = Field("node_practice", pattern="^(node_practice|boss|intervention_baseline|intervention_practice|intervention_post)$")
     questions: List[QuizQuestionIn] = Field(..., min_length=1)
 
 
@@ -227,3 +235,76 @@ class CourseAssessmentActivityOut(BaseModel):
     marks_available: Optional[float] = None
     started_at: datetime
     submitted_at: Optional[datetime] = None
+
+
+class FormalQuizCreateRequest(BaseModel):
+    title: str = Field(..., min_length=2, max_length=255)
+    description: Optional[str] = None
+    time_limit_minutes: Optional[int] = Field(None, ge=1, le=300)
+    scheduled_start_at: Optional[datetime] = None
+    scheduled_end_at: Optional[datetime] = None
+    shuffle_questions: bool = True
+    shuffle_options: bool = True
+    publish: bool = True
+    questions: List[QuizQuestionIn] = Field(..., min_length=1)
+
+
+class StudentOverrideCreate(BaseModel):
+    student_membership_id: UUID
+    override_type: str = Field("makeup_window", pattern="^(makeup_window|confirmed_absence)$")
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    reason: str = Field(..., min_length=3)
+
+
+class StudentOverrideOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    student_membership_id: UUID
+    override_type: str
+    status: str
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    reason: str
+    created_at: datetime
+
+
+class RosterStudentResultOut(BaseModel):
+    student_membership_id: UUID
+    student_user_id: Optional[UUID] = None
+    full_name: str
+    registration_number: Optional[str] = None
+    roll_number: Optional[str] = None
+    email: Optional[str] = None
+    status: str  # "submitted" | "not_attempted" | "absent" | "makeup_pending"
+    attempt_id: Optional[UUID] = None
+    attempt_number: Optional[int] = None
+    started_at: Optional[datetime] = None
+    submitted_at: Optional[datetime] = None
+    raw_marks_awarded: Optional[float] = None
+    faculty_override_marks: Optional[float] = None
+    effective_marks: Optional[float] = None
+    marks_available: float
+    override_reason: Optional[str] = None
+    active_makeup: Optional[StudentOverrideOut] = None
+
+
+class MarkOverrideRequest(BaseModel):
+    marks: float = Field(..., ge=0.0)
+    reason: str = Field(..., min_length=3)
+
+
+class FormalQuizRosterSummaryOut(BaseModel):
+    quiz_id: UUID
+    quiz_title: str
+    course_offering_id: UUID
+    is_finalized: bool
+    finalized_at: Optional[datetime] = None
+    total_enrolled: int
+    total_submitted: int
+    total_absent: int
+    total_makeup_pending: int
+    total_not_attempted: int
+    students: List[RosterStudentResultOut]
+

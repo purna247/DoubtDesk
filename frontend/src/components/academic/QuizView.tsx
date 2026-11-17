@@ -2,19 +2,25 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Award,
+  Calendar,
   Check,
   CheckCircle2,
   ChevronDown,
   Clock,
   Copy,
+  Download,
+  Edit3,
   Eye,
   FileText,
   HelpCircle,
   Loader2,
+  Lock,
   Plus,
   Send,
+  Shuffle,
   Sparkles,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -27,6 +33,8 @@ import type {
   AttemptSummary,
   QuizAiGenerateResponse,
   StartAttemptResponse,
+  FormalQuizRosterSummary,
+  RosterStudentResult,
 } from '../../types/assessments';
 
 interface QuizViewProps {
@@ -34,6 +42,14 @@ interface QuizViewProps {
   onShowToast?: (msg: string) => void;
   selectedSubject?: string;
   offerings?: CourseOffering[];
+  initialBuilderState?: {
+    offeringId?: string;
+    assessmentType?: Assessment['assessment_type'];
+    conceptId?: string;
+    conceptName?: string;
+    defaultTitle?: string;
+  } | null;
+  onClearInitialBuilderState?: () => void;
 }
 
 interface QuizWithCourse {
@@ -134,6 +150,8 @@ export const QuizView: React.FC<QuizViewProps> = ({
   onShowToast,
   selectedSubject = 'all',
   offerings = [],
+  initialBuilderState,
+  onClearInitialBuilderState,
 }) => {
   const { role } = useAuth();
   const isTeacher = role === 'TEACHER' || role === 'ADMIN' || role === 'SUPER_ADMIN';
@@ -159,6 +177,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
   const [builderOfferingId, setBuilderOfferingId] = useState('');
   const [manualTitle, setManualTitle] = useState('');
   const [manualDescription, setManualDescription] = useState('');
+  const [hasTimeLimit, setHasTimeLimit] = useState(false);
   const [manualTimeLimit, setManualTimeLimit] = useState(15);
   const [manualQuestions, setManualQuestions] = useState<DraftQuestion[]>([createEmptyQuestion()]);
   const [aiSources, setAiSources] = useState<QuizAiGenerateResponse['sources']>([]);
@@ -166,8 +185,43 @@ export const QuizView: React.FC<QuizViewProps> = ({
   const [bankQuestions, setBankQuestions] = useState<Question[]>([]);
   const [bankSelectedIds, setBankSelectedIds] = useState<string[]>([]);
   const [bankTitle, setBankTitle] = useState('');
+  const [hasBankDuration, setHasBankDuration] = useState(false);
   const [bankDuration, setBankDuration] = useState(30);
   const [bankLoading, setBankLoading] = useState(false);
+
+  // Assessment Purpose & Intervention Phase state
+  const [manualAssessmentType, setManualAssessmentType] = useState<Assessment['assessment_type']>('node_practice');
+  const [manualConceptId, setManualConceptId] = useState<string | null>(null);
+  const [manualConceptName, setManualConceptName] = useState<string | null>(null);
+
+  // Formal Quiz Builder fields
+  const [isFormalQuiz, setIsFormalQuiz] = useState(false);
+  const [formalStartAt, setFormalStartAt] = useState('');
+  const [formalEndAt, setFormalEndAt] = useState('');
+  const [shuffleQuestions, setShuffleQuestions] = useState(true);
+  const [shuffleOptions, setShuffleOptions] = useState(true);
+
+  // Faculty Class Roster & Gradebook modal
+  const [rosterModalQuiz, setRosterModalQuiz] = useState<QuizWithCourse | null>(null);
+  const [rosterData, setRosterData] = useState<FormalQuizRosterSummary | null>(null);
+  const [loadingRoster, setLoadingRoster] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [finalizingQuiz, setFinalizingQuiz] = useState(false);
+
+  // Individual Student Makeup Authorization modal
+  const [makeupModalOpen, setMakeupModalOpen] = useState(false);
+  const [selectedStudentForMakeup, setSelectedStudentForMakeup] = useState<RosterStudentResult | null>(null);
+  const [makeupStartAt, setMakeupStartAt] = useState('');
+  const [makeupEndAt, setMakeupEndAt] = useState('');
+  const [makeupReason, setMakeupReason] = useState('');
+  const [savingMakeup, setSavingMakeup] = useState(false);
+
+  // Teacher Mark Adjustment modal
+  const [markOverrideModalOpen, setMarkOverrideModalOpen] = useState(false);
+  const [selectedStudentForMarkOverride, setSelectedStudentForMarkOverride] = useState<RosterStudentResult | null>(null);
+  const [overrideMarkValue, setOverrideMarkValue] = useState<number>(0);
+  const [overrideMarkReason, setOverrideMarkReason] = useState('');
+  const [savingMarkOverride, setSavingMarkOverride] = useState(false);
 
   // Teacher Preview state
   const [previewTarget, setPreviewTarget] = useState<QuizWithCourse | null>(null);
@@ -263,17 +317,66 @@ export const QuizView: React.FC<QuizViewProps> = ({
   const openManualBuilder = (prefill?: {
     offeringId?: string;
     title?: string;
+    defaultTitle?: string;
     description?: string;
     questions?: DraftQuestion[];
+    assessmentType?: Assessment['assessment_type'];
+    conceptId?: string;
+    conceptName?: string;
   }) => {
-    setBuilderOfferingId(prefill?.offeringId || scopedOfferings[0]?.id || offerings[0]?.id || '');
-    setManualTitle(prefill?.title ?? '');
+    const targetOfferingId = prefill?.offeringId || scopedOfferings[0]?.id || offerings[0]?.id || '';
+    const targetType = prefill?.assessmentType || 'node_practice';
+    const targetConceptName = prefill?.conceptName;
+
+    // Smart default title if none provided
+    let suggestedTitle = prefill?.title || prefill?.defaultTitle || '';
+    if (!suggestedTitle) {
+      if (targetType === 'intervention_baseline') {
+        suggestedTitle = targetConceptName
+          ? `${targetConceptName} · Baseline Pre-Test`
+          : 'Baseline Pre-Test (Phase A)';
+      } else if (targetType === 'intervention_practice') {
+        suggestedTitle = targetConceptName
+          ? `${targetConceptName} · Targeted Practice`
+          : 'Targeted Practice (Phase B)';
+      } else if (targetType === 'intervention_post') {
+        suggestedTitle = targetConceptName
+          ? `${targetConceptName} · Post-Test Reassessment`
+          : 'Post-Test Reassessment (Phase C)';
+      }
+    }
+
+    setBuilderOfferingId(targetOfferingId);
+    setManualTitle(suggestedTitle);
     setManualDescription(prefill?.description ?? '');
+    setHasTimeLimit(false); // Time limit is optional and untimed by default
     setManualTimeLimit(Math.max(5, (prefill?.questions?.length ?? 3) * 3));
     setManualQuestions(prefill?.questions?.length ? prefill.questions : [createEmptyQuestion()]);
     if (!prefill?.questions?.length) setAiSources([]);
+    setManualAssessmentType(targetType);
+    setManualConceptId(prefill?.conceptId || null);
+    setManualConceptName(prefill?.conceptName || null);
+    setIsFormalQuiz(false);
+    setFormalStartAt('');
+    setFormalEndAt('');
+    setShuffleQuestions(true);
+    setShuffleOptions(true);
     setMode('manual_form');
   };
+
+  useEffect(() => {
+    if (initialBuilderState) {
+      openManualBuilder({
+        offeringId: initialBuilderState.offeringId,
+        title: initialBuilderState.defaultTitle,
+        defaultTitle: initialBuilderState.defaultTitle,
+        assessmentType: initialBuilderState.assessmentType,
+        conceptId: initialBuilderState.conceptId,
+        conceptName: initialBuilderState.conceptName,
+      });
+      onClearInitialBuilderState?.();
+    }
+  }, [initialBuilderState]);
 
   const openQuestionBankBuilder = async () => {
     if (!builderOfferingId) return;
@@ -298,7 +401,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
         assessment_type: 'node_practice', title: bankTitle.trim(),
         description: 'Practice paper assembled from approved, source-linked Question Bank records.',
         version: {
-          duration_seconds: Number(bankDuration) * 60,
+          duration_seconds: hasBankDuration && Number(bankDuration) > 0 ? Number(bankDuration) * 60 : null,
           items: selected.map((question, index) => {
             const version = question.latest_version!;
             const allocations = new Map<string, number>();
@@ -386,9 +489,18 @@ export const QuizView: React.FC<QuizViewProps> = ({
       onShowToast?.('Please select a course offering.');
       return;
     }
-    if (!manualTitle.trim()) {
-      onShowToast?.('Please enter a Quiz Title.');
-      return;
+    let finalTitle = manualTitle.trim();
+    if (!finalTitle) {
+      if (manualAssessmentType === 'intervention_baseline') {
+        finalTitle = manualConceptName ? `${manualConceptName} · Baseline Pre-Test` : 'Intervention: Baseline Pre-Test (Phase A)';
+      } else if (manualAssessmentType === 'intervention_practice') {
+        finalTitle = manualConceptName ? `${manualConceptName} · Targeted Practice` : 'Intervention: Targeted Practice (Phase B)';
+      } else if (manualAssessmentType === 'intervention_post') {
+        finalTitle = manualConceptName ? `${manualConceptName} · Post-Test Reassessment` : 'Intervention: Post-Test (Phase C)';
+      } else {
+        onShowToast?.('Please enter a Quiz Title.');
+        return;
+      }
     }
     if (manualQuestions.some((q) => !q.statement.trim())) {
       onShowToast?.('Please fill in the statement for every question.');
@@ -399,37 +511,83 @@ export const QuizView: React.FC<QuizViewProps> = ({
       return;
     }
 
+    if (isFormalQuiz && formalStartAt && formalEndAt && new Date(formalEndAt) <= new Date(formalStartAt)) {
+      onShowToast?.('Scheduled end time must be strictly after start time.');
+      return;
+    }
+
     setSavingQuiz(true);
     try {
-      await apiClient.post(`/api/v1/courses/${builderOfferingId}/quizzes`, {
-        title: manualTitle.trim(),
-        description: manualDescription.trim() || null,
-        time_limit_minutes: Number(manualTimeLimit) || 15,
-        publish,
-        questions: manualQuestions.map((q) => {
-          const validOpts = q.options.filter((o) => o.text.trim());
-          const correctIdx = Math.max(
-            0,
-            validOpts.findIndex((o) => o.isCorrect)
-          );
-          return {
-            statement: q.statement.trim(),
-            options: validOpts.map((o) => o.text.trim()),
-            correct_index: correctIdx,
-            explanation: q.explanation.trim() || null,
-            marks: Number(q.marks) > 0 ? Number(q.marks) : 2,
-            source_chunk_ids: q.sourceChunkIds ?? [],
-            concept_ids: q.conceptIds ?? [],
-            origin_type: q.sourceChunkIds?.length ? 'ai_supplementary' : 'teacher_authored',
-          };
-        }),
+      const endpoint = isFormalQuiz
+        ? `/api/v1/courses/${builderOfferingId}/formal-quizzes`
+        : `/api/v1/courses/${builderOfferingId}/quizzes`;
+
+      const questionsPayload = manualQuestions.map((q) => {
+        const validOpts = q.options.filter((o) => o.text.trim());
+        const correctIdx = Math.max(
+          0,
+          validOpts.findIndex((o) => o.isCorrect)
+        );
+        const resolvedConceptIds = q.conceptIds?.length
+          ? q.conceptIds
+          : manualConceptId
+          ? [manualConceptId]
+          : [];
+
+        return {
+          statement: q.statement.trim(),
+          options: validOpts.map((o) => o.text.trim()),
+          correct_index: correctIdx,
+          explanation: q.explanation.trim() || null,
+          marks: Number(q.marks) > 0 ? Number(q.marks) : 2,
+          source_chunk_ids: q.sourceChunkIds ?? [],
+          concept_ids: resolvedConceptIds,
+          origin_type: q.sourceChunkIds?.length ? ('ai_supplementary' as const) : ('teacher_authored' as const),
+        };
       });
+
+      const resolvedTimeLimit = hasTimeLimit && Number(manualTimeLimit) > 0 ? Number(manualTimeLimit) : null;
+
+      const bodyPayload = isFormalQuiz
+        ? {
+            title: finalTitle,
+            description: manualDescription.trim() || null,
+            time_limit_minutes: resolvedTimeLimit,
+            scheduled_start_at: formalStartAt ? new Date(formalStartAt).toISOString() : null,
+            scheduled_end_at: formalEndAt ? new Date(formalEndAt).toISOString() : null,
+            shuffle_questions: shuffleQuestions,
+            shuffle_options: shuffleOptions,
+            publish,
+            questions: questionsPayload,
+          }
+        : {
+            title: finalTitle,
+            description: manualDescription.trim() || null,
+            time_limit_minutes: resolvedTimeLimit,
+            assessment_type: manualAssessmentType,
+            publish,
+            questions: questionsPayload,
+          };
+
+      await apiClient.post(endpoint, bodyPayload);
       await loadQuizzes();
       setMode('list');
+
+      const typeLabel =
+        manualAssessmentType === 'intervention_baseline'
+          ? 'Phase A Baseline Pre-Test'
+          : manualAssessmentType === 'intervention_practice'
+          ? 'Phase B Targeted Practice'
+          : manualAssessmentType === 'intervention_post'
+          ? 'Phase C Post-Test Reassessment'
+          : isFormalQuiz
+          ? 'Formal Quiz'
+          : 'Quiz';
+
       onShowToast?.(
         publish
-          ? `Quiz "${manualTitle.trim()}" published to students!`
-          : `Quiz "${manualTitle.trim()}" saved as draft.`
+          ? `${typeLabel} "${manualTitle.trim()}" published successfully!`
+          : `${typeLabel} "${manualTitle.trim()}" saved as draft.`
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Could not save quiz. Please retry.';
@@ -460,6 +618,135 @@ export const QuizView: React.FC<QuizViewProps> = ({
       onShowToast?.('Quiz removed.');
     } catch {
       onShowToast?.('Could not remove quiz.');
+    }
+  };
+
+  const loadRoster = async (quiz: QuizWithCourse) => {
+    setLoadingRoster(true);
+    try {
+      const offeringId = quiz.offering?.id || quiz.assessment.course_offering_id;
+      const data = await apiClient.get<FormalQuizRosterSummary>(
+        `/api/v1/courses/${offeringId}/formal-quizzes/${quiz.assessment.id}/roster`
+      );
+      setRosterData(data);
+    } catch {
+      onShowToast?.('Could not load formal quiz class roster.');
+    } finally {
+      setLoadingRoster(false);
+    }
+  };
+
+  const handleOpenRoster = async (quiz: QuizWithCourse) => {
+    setRosterModalQuiz(quiz);
+    await loadRoster(quiz);
+  };
+
+  const handleGrantMakeup = async () => {
+    if (!rosterModalQuiz || !selectedStudentForMakeup || !makeupStartAt || !makeupEndAt || !makeupReason.trim()) {
+      onShowToast?.('Please fill in all makeup scheduling fields.');
+      return;
+    }
+    setSavingMakeup(true);
+    try {
+      await apiClient.post(`/api/v1/formal-quizzes/${rosterModalQuiz.assessment.id}/overrides`, {
+        student_membership_id: selectedStudentForMakeup.student_membership_id,
+        override_type: 'makeup_window',
+        start_at: new Date(makeupStartAt).toISOString(),
+        end_at: new Date(makeupEndAt).toISOString(),
+        reason: makeupReason.trim(),
+      });
+      onShowToast?.(`Makeup window authorized for ${selectedStudentForMakeup.full_name}.`);
+      setMakeupModalOpen(false);
+      setSelectedStudentForMakeup(null);
+      setMakeupReason('');
+      await loadRoster(rosterModalQuiz);
+    } catch (err: unknown) {
+      onShowToast?.(err instanceof Error ? err.message : 'Could not grant makeup window.');
+    } finally {
+      setSavingMakeup(false);
+    }
+  };
+
+  const handleMarkAbsent = async (student: RosterStudentResult) => {
+    if (!rosterModalQuiz) return;
+    const reason = window.prompt(`Enter reason for recording confirmed absence for ${student.full_name}:`, 'Unexcused absence - student failed to report');
+    if (!reason?.trim()) return;
+    try {
+      await apiClient.post(`/api/v1/formal-quizzes/${rosterModalQuiz.assessment.id}/overrides`, {
+        student_membership_id: student.student_membership_id,
+        override_type: 'confirmed_absence',
+        reason: reason.trim(),
+      });
+      onShowToast?.(`Confirmed absence recorded for ${student.full_name}.`);
+      await loadRoster(rosterModalQuiz);
+    } catch {
+      onShowToast?.('Could not record confirmed absence.');
+    }
+  };
+
+  const handleSaveMarkOverride = async () => {
+    if (!rosterModalQuiz || !selectedStudentForMarkOverride?.attempt_id || !overrideMarkReason.trim()) {
+      onShowToast?.('Please enter override marks and justification reason.');
+      return;
+    }
+    setSavingMarkOverride(true);
+    try {
+      await apiClient.put(`/api/v1/formal-quizzes/attempts/${selectedStudentForMarkOverride.attempt_id}/override-marks`, {
+        marks: Number(overrideMarkValue),
+        reason: overrideMarkReason.trim(),
+      });
+      onShowToast?.(`Marks updated for ${selectedStudentForMarkOverride.full_name}.`);
+      setMarkOverrideModalOpen(false);
+      setSelectedStudentForMarkOverride(null);
+      setOverrideMarkReason('');
+      await loadRoster(rosterModalQuiz);
+    } catch (err: unknown) {
+      onShowToast?.(err instanceof Error ? err.message : 'Could not update marks.');
+    } finally {
+      setSavingMarkOverride(false);
+    }
+  };
+
+  const handleFinalizeQuiz = async () => {
+    if (!rosterModalQuiz) return;
+    if (!window.confirm(`Are you sure you want to finalize "${rosterModalQuiz.assessment.title}"? Official grades will be locked and question explanations will become visible to students.`)) {
+      return;
+    }
+    setFinalizingQuiz(true);
+    try {
+      await apiClient.post(`/api/v1/formal-quizzes/${rosterModalQuiz.assessment.id}/finalize`, {});
+      onShowToast?.('Quiz marks finalized! Solutions unlocked for students.');
+      await loadQuizzes();
+      await loadRoster(rosterModalQuiz);
+    } catch {
+      onShowToast?.('Could not finalize quiz.');
+    } finally {
+      setFinalizingQuiz(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (!rosterModalQuiz) return;
+    const offeringId = rosterModalQuiz.offering?.id || rosterModalQuiz.assessment.course_offering_id;
+    if (!offeringId) return;
+    setExportingExcel(true);
+    try {
+      const blob = await apiClient.getBlob(
+        `/api/v1/courses/${offeringId}/formal-quizzes/${rosterModalQuiz.assessment.id}/export-excel`
+      );
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Quiz_Marks_${rosterModalQuiz.assessment.id.slice(0, 8)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      onShowToast?.('Official Excel (.xlsx) roster downloaded successfully.');
+    } catch {
+      onShowToast?.('Could not download Excel gradebook.');
+    } finally {
+      setExportingExcel(false);
     }
   };
 
@@ -926,7 +1213,32 @@ export const QuizView: React.FC<QuizViewProps> = ({
       <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
         <h2 className="text-lg font-bold">Build from approved Question Bank records</h2>
         <input value={bankTitle} onChange={(event) => setBankTitle(event.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" aria-label="Practice paper title" />
-        <label className="block text-xs font-semibold text-slate-600">Duration in minutes<input type="number" min="1" max="300" value={bankDuration} onChange={(event) => setBankDuration(Number(event.target.value))} className="ml-2 w-24 rounded-lg border border-slate-200 px-2 py-1.5" /></label>
+        <div className="flex items-center gap-3 text-xs font-semibold text-slate-600">
+          <label className="flex items-center gap-1.5 cursor-pointer text-[#0A8FF5]">
+            <input
+              type="checkbox"
+              checked={hasBankDuration}
+              onChange={(e) => setHasBankDuration(e.target.checked)}
+              className="rounded border-slate-300 text-[#0A8FF5] w-3.5 h-3.5 cursor-pointer"
+            />
+            <span>Set Time Limit</span>
+          </label>
+          {hasBankDuration ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min="1"
+                max="300"
+                value={bankDuration}
+                onChange={(event) => setBankDuration(Math.max(1, Number(event.target.value)))}
+                className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+              />
+              <span className="text-slate-500 font-normal">mins</span>
+            </div>
+          ) : (
+            <span className="text-slate-400 font-normal">Untimed (Self-paced)</span>
+          )}
+        </div>
         {bankQuestions.length ? <div className="space-y-2">{bankQuestions.map((question) => { const version = question.latest_version; if (!version) return null; return <label key={question.id} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-3"><input type="checkbox" checked={bankSelectedIds.includes(question.id)} onChange={(event) => setBankSelectedIds((ids) => event.target.checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} className="mt-1"/><span className="min-w-0"><span className="block text-sm font-semibold text-slate-900">{version.prompt_text}</span><span className="mt-1 block text-[11px] text-slate-500">{question.origin_type.replace('_', ' ')} · {version.marks_total} marks · {version.difficulty_level} · {version.parts.reduce((n, part) => n + part.concept_allocations.length, 0)} concept mappings</span></span></label>; })}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No approved Question Bank records are available for this course.</p>}
       </section>
     </div>;
@@ -967,21 +1279,38 @@ export const QuizView: React.FC<QuizViewProps> = ({
         <div className="border border-[#DCE7EE] rounded-[16px] bg-white overflow-hidden">
           <div className="h-2 bg-[#0A8FF5]" />
           <div className="p-5 sm:p-6 space-y-4">
-            <input
-              type="text"
-              value={manualTitle}
-              onChange={(e) => setManualTitle(e.target.value)}
-              placeholder="Quiz Title (e.g. Unit 1: Asymptotic Analysis & Recurrences)"
-              className="w-full text-xl font-bold text-[#111111] placeholder-slate-400 border-b border-transparent hover:border-[#DCE7EE] focus:border-[#0A8FF5] focus:outline-none pb-1 transition"
-            />
-            <textarea
-              rows={2}
-              value={manualDescription}
-              onChange={(e) => setManualDescription(e.target.value)}
-              placeholder="Quiz description or instructions for students..."
-              className="w-full text-xs text-[#4D5963] placeholder-slate-400 border-b border-transparent hover:border-[#DCE7EE] focus:border-[#0A8FF5] focus:outline-none resize-none pb-1 transition"
-            />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-[#71808C] uppercase tracking-wider">
+                  Quiz Title <span className="text-red-500">*</span>
+                </label>
+                {manualAssessmentType.startsWith('intervention_') && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                    Intervention Assessment
+                  </span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={manualTitle}
+                onChange={(e) => setManualTitle(e.target.value)}
+                placeholder="Quiz Title (e.g. Unit 1: Asymptotic Analysis & Recurrences)"
+                className="w-full h-10 px-3.5 rounded-xl border border-[#DCE7EE] bg-white text-base font-bold text-[#111111] placeholder:text-slate-400 focus:outline-none focus:border-[#0A8FF5] focus:ring-1 focus:ring-[#0A8FF5] transition"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-[#71808C] uppercase tracking-wider">
+                Quiz Description / Instructions <span className="text-slate-400 font-normal lowercase">(optional)</span>
+              </label>
+              <textarea
+                rows={2}
+                value={manualDescription}
+                onChange={(e) => setManualDescription(e.target.value)}
+                placeholder="Quiz description or instructions for students..."
+                className="w-full p-2.5 rounded-xl border border-[#DCE7EE] bg-white text-xs text-[#4D5963] placeholder:text-slate-400 focus:outline-none focus:border-[#0A8FF5] resize-none transition"
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
               <div className="space-y-1">
                 <label className="text-[11px] font-bold text-[#71808C] uppercase tracking-wider">
                   Assigned Course
@@ -1000,17 +1329,167 @@ export const QuizView: React.FC<QuizViewProps> = ({
               </div>
               <div className="space-y-1">
                 <label className="text-[11px] font-bold text-[#71808C] uppercase tracking-wider">
-                  Time Limit (Minutes)
+                  Assessment Purpose / Type
                 </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={180}
-                  value={manualTimeLimit}
-                  onChange={(e) => setManualTimeLimit(Number(e.target.value))}
-                  className="w-full h-9 px-3 rounded-lg border border-[#DCE7EE] text-xs font-semibold text-[#111111] focus:outline-none focus:border-[#0A8FF5]"
-                />
+                <select
+                  value={isFormalQuiz ? 'formal_quiz' : manualAssessmentType}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'formal_quiz') {
+                      setIsFormalQuiz(true);
+                      setManualAssessmentType('node_practice');
+                    } else {
+                      setIsFormalQuiz(false);
+                      const newType = val as Assessment['assessment_type'];
+                      setManualAssessmentType(newType);
+                      if (!manualTitle.trim() || manualTitle.includes('Pre-Test') || manualTitle.includes('Targeted Practice') || manualTitle.includes('Post-Test') || manualTitle.includes('Baseline')) {
+                        if (newType === 'intervention_baseline') {
+                          setManualTitle(manualConceptName ? `${manualConceptName} · Baseline Pre-Test` : 'Baseline Pre-Test (Phase A)');
+                        } else if (newType === 'intervention_practice') {
+                          setManualTitle(manualConceptName ? `${manualConceptName} · Targeted Practice` : 'Targeted Practice (Phase B)');
+                        } else if (newType === 'intervention_post') {
+                          setManualTitle(manualConceptName ? `${manualConceptName} · Post-Test Reassessment` : 'Post-Test Reassessment (Phase C)');
+                        }
+                      }
+                    }
+                  }}
+                  className="w-full h-9 px-3 rounded-lg border border-[#DCE7EE] text-xs font-semibold text-[#111111] bg-white focus:outline-none focus:border-[#0A8FF5]"
+                >
+                  <option value="node_practice">Standard Practice Quiz</option>
+                  <option value="formal_quiz">Formal Academic Quiz (Evaluated)</option>
+                  <option value="intervention_baseline">Intervention: Baseline Pre-Test (Phase A)</option>
+                  <option value="intervention_practice">Intervention: Targeted Practice (Phase B)</option>
+                  <option value="intervention_post">Intervention: Post-Test Reassessment (Phase C)</option>
+                </select>
               </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-[#71808C] uppercase tracking-wider">
+                    Time Limit
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-[#0A8FF5] hover:text-[#0980dc]">
+                    <input
+                      type="checkbox"
+                      checked={hasTimeLimit}
+                      onChange={(e) => setHasTimeLimit(e.target.checked)}
+                      className="rounded border-[#DCE7EE] text-[#0A8FF5] focus:ring-[#0A8FF5] w-3.5 h-3.5 cursor-pointer"
+                    />
+                    <span>Set Time Limit</span>
+                  </label>
+                </div>
+                {hasTimeLimit ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={manualTimeLimit}
+                      onChange={(e) => setManualTimeLimit(Math.max(1, Number(e.target.value)))}
+                      placeholder="e.g. 15"
+                      className="w-full h-9 px-3 rounded-lg border border-[#DCE7EE] text-xs font-semibold text-[#111111] bg-white focus:outline-none focus:border-[#0A8FF5]"
+                    />
+                    <span className="text-xs font-semibold text-[#71808C] shrink-0">mins</span>
+                  </div>
+                ) : (
+                  <div className="h-9 px-3 rounded-lg border border-dashed border-[#DCE7EE] bg-slate-50/70 flex items-center justify-between text-xs text-[#71808C]">
+                    <span className="inline-flex items-center gap-1.5 font-medium">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" /> Untimed (No time limit)
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-medium">Optional</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {manualAssessmentType.startsWith('intervention_') && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
+                <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">
+                    Targeted Intervention Assessment:{' '}
+                    {manualAssessmentType === 'intervention_baseline'
+                      ? 'Phase A · Baseline Pre-Test'
+                      : manualAssessmentType === 'intervention_practice'
+                      ? 'Phase B · Targeted Practice'
+                      : 'Phase C · Post-Test Reassessment'}
+                  </p>
+                  <p className="text-[11px] text-blue-700 mt-0.5">
+                    {manualConceptName
+                      ? `Mapped to target concept: "${manualConceptName}". All questions in this assessment will automatically allocate marks to this concept to satisfy intervention pre/post comparability.`
+                      : 'All questions created in this assessment will allocate concept marks to satisfy intervention pre/post comparability.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Formal Evaluated Quiz Toggle & Configuration */}
+            <div className="pt-2 border-t border-[#EDF4F8] space-y-3">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isFormalQuiz}
+                  onChange={(e) => setIsFormalQuiz(e.target.checked)}
+                  className="rounded border-[#DCE7EE] text-[#0A8FF5] focus:ring-[#0A8FF5] w-4 h-4 cursor-pointer"
+                />
+                <span className="text-xs font-bold text-[#111111]">
+                  Formal Evaluated Quiz (Credit-bearing, Scheduled Window, Single-Attempt)
+                </span>
+              </label>
+
+              {isFormalQuiz && (
+                <div className="bg-[#F8FAFC] border border-indigo-100 rounded-xl p-3.5 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#4D5963] mb-1">
+                        Scheduled Window Opens (Start Time)
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={formalStartAt}
+                        onChange={(e) => setFormalStartAt(e.target.value)}
+                        className="w-full h-8 px-2.5 rounded-lg border border-[#DCE7EE] bg-white text-xs text-[#111111] focus:outline-none focus:border-[#0A8FF5]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#4D5963] mb-1">
+                        Scheduled Window Closes (Hard Cutoff)
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={formalEndAt}
+                        onChange={(e) => setFormalEndAt(e.target.value)}
+                        className="w-full h-8 px-2.5 rounded-lg border border-[#DCE7EE] bg-white text-xs text-[#111111] focus:outline-none focus:border-[#0A8FF5]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4 pt-1 text-xs">
+                    <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={shuffleQuestions}
+                        onChange={(e) => setShuffleQuestions(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Shuffle className="w-3.5 h-3.5 text-indigo-500" />
+                      Randomize Question Order (Deterministic SHA-256)
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={shuffleOptions}
+                        onChange={(e) => setShuffleOptions(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Shuffle className="w-3.5 h-3.5 text-indigo-500" />
+                      Randomize Options Order
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-slate-500 italic">
+                    Note: Latecomers receive only remaining window time. Solutions are strictly hidden until you finalize grades.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1311,7 +1790,8 @@ export const QuizView: React.FC<QuizViewProps> = ({
           {visibleQuizzes.map(({ assessment, offering }) => {
             const items = assessment.latest_version?.items || [];
             const totalMarks = items.reduce((sum, it) => sum + it.marks_available, 0);
-            const mins = Math.round((assessment.latest_version?.duration_seconds || 900) / 60);
+            const durationSec = assessment.latest_version?.duration_seconds;
+            const mins = durationSec ? Math.round(durationSec / 60) : null;
 
             return (
               <div
@@ -1330,6 +1810,37 @@ export const QuizView: React.FC<QuizViewProps> = ({
                     >
                       {assessment.status === 'published' ? 'Published' : 'Draft'}
                     </span>
+                    {assessment.is_formal_quiz && (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                        Formal Quiz
+                      </span>
+                    )}
+                    {assessment.is_formal_quiz && (
+                      <span
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                          assessment.is_finalized
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-amber-50 text-amber-700 border border-amber-200'
+                        }`}
+                      >
+                        {assessment.is_finalized ? 'Finalized' : 'Marks Open'}
+                      </span>
+                    )}
+                    {assessment.assessment_type === 'intervention_baseline' && (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                        Phase A · Baseline
+                      </span>
+                    )}
+                    {assessment.assessment_type === 'intervention_practice' && (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        Phase B · Practice
+                      </span>
+                    )}
+                    {assessment.assessment_type === 'intervention_post' && (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        Phase C · Post-Test
+                      </span>
+                    )}
                   </div>
                   {assessment.description && (
                     <p className="text-xs text-[#4D5963] line-clamp-1">{assessment.description}</p>
@@ -1339,13 +1850,22 @@ export const QuizView: React.FC<QuizViewProps> = ({
                     <span>•</span>
                     <span>{items.length} Questions ({totalMarks} Marks)</span>
                     <span>•</span>
-                    <span>{mins} mins</span>
+                    <span>{mins ? `${mins} mins` : 'Untimed'}</span>
                     <span>•</span>
                     <span>{new Date(assessment.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
+                  {assessment.is_formal_quiz && (
+                    <button
+                      type="button"
+                      onClick={() => void handleOpenRoster({ assessment, offering })}
+                      className="px-3.5 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Users className="w-3.5 h-3.5" /> Roster & Marks
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -1385,7 +1905,8 @@ export const QuizView: React.FC<QuizViewProps> = ({
           {visibleQuizzes.map(({ assessment, offering }) => {
             const items = assessment.latest_version?.items || [];
             const totalMarks = items.reduce((sum, it) => sum + it.marks_available, 0);
-            const mins = Math.round((assessment.latest_version?.duration_seconds || 900) / 60);
+            const durationSec = assessment.latest_version?.duration_seconds;
+            const mins = durationSec ? Math.round(durationSec / 60) : null;
 
             return (
               <div
@@ -1394,16 +1915,58 @@ export const QuizView: React.FC<QuizViewProps> = ({
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="text-[11px] font-bold text-[#0A8FF5] uppercase tracking-wider truncate">
-                      {offering?.subject_name || offering?.official_subject_code || 'Course Quiz'}
-                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[11px] font-bold text-[#0A8FF5] uppercase tracking-wider truncate">
+                        {offering?.subject_name || offering?.official_subject_code || 'Course Quiz'}
+                      </span>
+                      {assessment.assessment_type === 'intervention_baseline' && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
+                          Phase A · Baseline
+                        </span>
+                      )}
+                      {assessment.assessment_type === 'intervention_practice' && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
+                          Phase B · Practice
+                        </span>
+                      )}
+                      {assessment.assessment_type === 'intervention_post' && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                          Phase C · Post-Test
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs font-semibold text-[#71808C] inline-flex items-center gap-1 shrink-0">
-                      <Clock className="w-3.5 h-3.5" /> {mins}m
+                      <Clock className="w-3.5 h-3.5" /> {mins ? `${mins}m` : 'Untimed'}
                     </span>
                   </div>
                   <h3 className="text-base font-bold text-[#111111] leading-snug">{assessment.title}</h3>
                   {assessment.description && (
                     <p className="text-xs text-[#4D5963] mt-1 line-clamp-2">{assessment.description}</p>
+                  )}
+                  {assessment.is_formal_quiz && (
+                    <div className="mt-2.5 p-2 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-between gap-2 text-[11px]">
+                      <span className="font-semibold text-indigo-900 inline-flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                        {assessment.scheduled_start_at
+                          ? new Date(assessment.scheduled_start_at).toLocaleDateString([], {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : 'Immediate'}
+                        {' - '}
+                        {assessment.scheduled_end_at
+                          ? new Date(assessment.scheduled_end_at).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : 'Open'}
+                      </span>
+                      <span className="text-indigo-600 font-bold uppercase text-[9px] px-1.5 py-0.5 bg-white rounded border border-indigo-200">
+                        Formal Quiz
+                      </span>
+                    </div>
                   )}
                 </div>
 
@@ -1653,6 +2216,372 @@ export const QuizView: React.FC<QuizViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* Faculty Class Roster & Formal Gradebook Modal                       */}
+      {/* ------------------------------------------------------------------- */}
+      {rosterModalQuiz && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-4 bg-slate-50/50">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    {rosterModalQuiz.assessment.title} — Class Roster & Marks
+                  </h2>
+                  <span
+                    className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                      rosterModalQuiz.assessment.is_finalized
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {rosterModalQuiz.assessment.is_finalized ? 'Finalized' : 'Marks Open'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Course: {formatOfferingLabel(rosterModalQuiz.offering)} • Formal Academic Evaluation
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={exportingExcel}
+                  onClick={() => void handleExportExcel()}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  title="Download Official Grade Sheet (.xlsx)"
+                >
+                  {exportingExcel ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5 text-emerald-600" />}
+                  Export Excel (.xlsx)
+                </button>
+
+                {!rosterModalQuiz.assessment.is_finalized ? (
+                  <button
+                    type="button"
+                    disabled={finalizingQuiz}
+                    onClick={() => void handleFinalizeQuiz()}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50 shadow-xs"
+                    title="Lock official grades and reveal solutions to students"
+                  >
+                    {finalizingQuiz ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Lock className="w-3.5 h-3.5" />}
+                    Finalize Marks
+                  </button>
+                ) : (
+                  <span className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold inline-flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" /> Marks Finalized
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRosterModalQuiz(null);
+                    setRosterData(null);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Stats Summary Strip */}
+            {rosterData && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-4 bg-slate-50 border-b border-slate-200 text-xs">
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                  <p className="text-[10px] uppercase font-bold text-slate-400">Enrolled</p>
+                  <p className="text-base font-bold text-slate-900 mt-0.5">{rosterData.total_enrolled}</p>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                  <p className="text-[10px] uppercase font-bold text-emerald-600">Submitted</p>
+                  <p className="text-base font-bold text-emerald-700 mt-0.5">{rosterData.total_submitted}</p>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                  <p className="text-[10px] uppercase font-bold text-rose-500">Absent</p>
+                  <p className="text-base font-bold text-rose-600 mt-0.5">{rosterData.total_absent}</p>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                  <p className="text-[10px] uppercase font-bold text-amber-500">Makeup Pending</p>
+                  <p className="text-base font-bold text-amber-600 mt-0.5">{rosterData.total_makeup_pending}</p>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                  <p className="text-[10px] uppercase font-bold text-slate-400">Unattempted</p>
+                  <p className="text-base font-bold text-slate-600 mt-0.5">{rosterData.total_not_attempted}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Roster Table Content */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              {loadingRoster ? (
+                <div className="py-16 text-center text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
+                  <p className="text-xs">Loading class enrolled roster and attempt logs...</p>
+                </div>
+              ) : rosterData?.students.length ? (
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="py-2.5 px-3">Reg. No</th>
+                        <th className="py-2.5 px-3">Student Name</th>
+                        <th className="py-2.5 px-3">Attendance / Status</th>
+                        <th className="py-2.5 px-3 text-right">Raw Score</th>
+                        <th className="py-2.5 px-3 text-right">Faculty Override</th>
+                        <th className="py-2.5 px-3 text-right">Final Marks</th>
+                        <th className="py-2.5 px-3 text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rosterData.students.map((student) => {
+                        const statusPill = {
+                          submitted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                          absent: 'bg-rose-50 text-rose-700 border-rose-200',
+                          makeup_pending: 'bg-amber-50 text-amber-700 border-amber-200',
+                          not_attempted: 'bg-slate-50 text-slate-600 border-slate-200',
+                        }[student.status];
+
+                        return (
+                          <tr key={student.student_membership_id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-3 px-3 font-mono text-[11px] text-slate-600">
+                              {student.registration_number || '-'}
+                            </td>
+                            <td className="py-3 px-3">
+                              <p className="font-semibold text-slate-900">{student.full_name}</p>
+                              {student.email && <p className="text-[11px] text-slate-400">{student.email}</p>}
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusPill}`}>
+                                {student.status.toUpperCase().replace('_', ' ')}
+                              </span>
+                              {student.override_reason && (
+                                <p className="text-[10px] text-slate-500 mt-0.5 max-w-[200px] truncate" title={student.override_reason}>
+                                  Note: {student.override_reason}
+                                </p>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-right font-medium text-slate-700">
+                              {typeof student.raw_marks_awarded === 'number' ? `${student.raw_marks_awarded.toFixed(1)} / ${student.marks_available}` : '—'}
+                            </td>
+                            <td className="py-3 px-3 text-right font-medium text-indigo-700">
+                              {typeof student.faculty_override_marks === 'number' ? `${student.faculty_override_marks.toFixed(1)}` : '—'}
+                            </td>
+                            <td className="py-3 px-3 text-right font-bold text-slate-900">
+                              {typeof student.effective_marks === 'number'
+                                ? `${student.effective_marks.toFixed(1)} / ${student.marks_available}`
+                                : '—'}
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                {student.attempt_id ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedStudentForMarkOverride(student);
+                                      setOverrideMarkValue(student.effective_marks ?? 0);
+                                      setOverrideMarkReason(student.override_reason || '');
+                                      setMarkOverrideModalOpen(true);
+                                    }}
+                                    className="px-2.5 py-1 rounded-md border border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300 font-semibold text-[11px] text-slate-700 inline-flex items-center gap-1 transition cursor-pointer"
+                                    title="Adjust Marks"
+                                  >
+                                    <Edit3 className="w-3 h-3" /> Adjust
+                                  </button>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedStudentForMakeup(student);
+                                        const nowStr = new Date().toISOString().slice(0, 16);
+                                        const laterStr = new Date(Date.now() + 2 * 3600 * 1000).toISOString().slice(0, 16);
+                                        setMakeupStartAt(nowStr);
+                                        setMakeupEndAt(laterStr);
+                                        setMakeupReason('');
+                                        setMakeupModalOpen(true);
+                                      }}
+                                      className="px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
+                                      title="Authorize individual makeup window"
+                                    >
+                                      <Clock className="w-3 h-3" /> Makeup
+                                    </button>
+                                    {student.status !== 'absent' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleMarkAbsent(student)}
+                                        className="px-2.5 py-1 rounded-md border border-slate-200 hover:bg-rose-50 hover:text-rose-700 font-semibold text-[11px] text-slate-600 transition cursor-pointer"
+                                        title="Record verified absence"
+                                      >
+                                        Mark Absent
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-12 text-center text-slate-400">
+                  <p>No enrolled students found in this course offering.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* Individual Student Makeup Window Modal                              */}
+      {/* ------------------------------------------------------------------- */}
+      {makeupModalOpen && selectedStudentForMakeup && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Authorize Makeup Quiz Window</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                For student: <span className="font-semibold text-slate-800">{selectedStudentForMakeup.full_name}</span> ({selectedStudentForMakeup.registration_number || 'N/A'})
+              </p>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Makeup Window Opens (Start)</label>
+                <input
+                  type="datetime-local"
+                  value={makeupStartAt}
+                  onChange={(e) => setMakeupStartAt(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Makeup Window Closes (End)</label>
+                <input
+                  type="datetime-local"
+                  value={makeupEndAt}
+                  onChange={(e) => setMakeupEndAt(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Authorization Justification (Required)</label>
+                <textarea
+                  rows={3}
+                  value={makeupReason}
+                  onChange={(e) => setMakeupReason(e.target.value)}
+                  placeholder="e.g. Documented medical emergency during initial slot / Approved college athletic representation"
+                  className="w-full p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 resize-none text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMakeupModalOpen(false);
+                  setSelectedStudentForMakeup(null);
+                }}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingMakeup}
+                onClick={() => void handleGrantMakeup()}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {savingMakeup ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Authorize Makeup Window
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* Faculty Mark Override Modal                                         */}
+      {/* ------------------------------------------------------------------- */}
+      {markOverrideModalOpen && selectedStudentForMarkOverride && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Faculty Mark Adjustment</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Adjust grade for <span className="font-semibold text-slate-800">{selectedStudentForMarkOverride.full_name}</span>
+              </p>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between">
+                <div>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase">Original Raw Score</p>
+                  <p className="text-sm font-bold text-slate-800">{selectedStudentForMarkOverride.raw_marks_awarded?.toFixed(1) ?? '—'} / {selectedStudentForMarkOverride.marks_available}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase">Current Effective</p>
+                  <p className="text-sm font-bold text-indigo-700">{selectedStudentForMarkOverride.effective_marks?.toFixed(1) ?? '—'}</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">New Total Marks Awarded</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  max={selectedStudentForMarkOverride.marks_available * 2}
+                  value={overrideMarkValue}
+                  onChange={(e) => setOverrideMarkValue(Number(e.target.value))}
+                  className="w-full h-9 px-3 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 font-bold text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Reason for Adjustment (Audit Logged)</label>
+                <textarea
+                  rows={3}
+                  value={overrideMarkReason}
+                  onChange={(e) => setOverrideMarkReason(e.target.value)}
+                  placeholder="e.g. Grace marks awarded for diagram ambiguity in Q2 / Manual review of partial steps"
+                  className="w-full p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 resize-none text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMarkOverrideModalOpen(false);
+                  setSelectedStudentForMarkOverride(null);
+                }}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingMarkOverride}
+                onClick={() => void handleSaveMarkOverride()}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {savingMarkOverride ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Save Adjustment
+              </button>
+            </div>
           </div>
         </div>
       )}

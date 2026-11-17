@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, BarChart3, Check, Loader2, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
+import { AlertCircle, BarChart3, Check, Loader2, Plus, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { MisconceptionReportPanel } from '../../components/academic/MisconceptionReportPanel';
 import { useCourseMisconceptions } from '../../hooks/useCourseMisconceptions';
@@ -77,13 +77,25 @@ interface InterventionReport {
   disclaimer: string;
 }
 
-export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = ({ offerings }) => {
+export interface CreateAssessmentIntent {
+  offeringId: string;
+  conceptId?: string;
+  conceptName?: string;
+  assessmentType: 'intervention_baseline' | 'intervention_practice' | 'intervention_post';
+  defaultTitle?: string;
+}
+
+export const TeacherAnalyticsPage: React.FC<{
+  offerings: CourseOffering[];
+  onCreateAssessment?: (intent: CreateAssessmentIntent) => void;
+}> = ({ offerings, onCreateAssessment }) => {
   const [offeringId, setOfferingId] = useState('');
   const [rows, setRows] = useState<ConceptAnalytics[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [interventions, setInterventions] = useState<Intervention[]>([]);
   const [detail, setDetail] = useState<ConceptDetail | null>(null);
   const [activeConceptId, setActiveConceptId] = useState<string | null>(null);
+  const activeConcept = rows.find((r) => r.concept_id === activeConceptId);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [title, setTitle] = useState('');
   const [primer, setPrimer] = useState('');
@@ -419,12 +431,33 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
                 placeholder="Targeted concept intervention"
               />
             </label>
-            <label className="text-xs font-semibold text-slate-700">
-              Phase A · Baseline pre-test
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-slate-700">Phase A · Baseline pre-test</span>
+                {onCreateAssessment && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onCreateAssessment({
+                        offeringId,
+                        conceptId: activeConceptId || undefined,
+                        conceptName: activeConcept?.concept_name || undefined,
+                        assessmentType: 'intervention_baseline',
+                        defaultTitle: activeConcept?.concept_name
+                          ? `${activeConcept.concept_name} · Baseline Pre-Test`
+                          : 'Baseline Pre-Test',
+                      })
+                    }
+                    className="text-[11px] font-semibold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" /> Create Assessment
+                  </button>
+                )}
+              </div>
               <select
                 value={phaseAId}
                 onChange={(e) => setPhaseAId(e.target.value)}
-                className="mt-1.5 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
+                className="mt-1 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
               >
                 <option value="">Select diagnostic assessment</option>
                 {assessments
@@ -435,13 +468,34 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
                     </option>
                   ))}
               </select>
-            </label>
-            <label className="text-xs font-semibold text-slate-700">
-              Phase B · Targeted practice
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-slate-700">Phase B · Targeted practice</span>
+                {onCreateAssessment && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onCreateAssessment({
+                        offeringId,
+                        conceptId: activeConceptId || undefined,
+                        conceptName: activeConcept?.concept_name || undefined,
+                        assessmentType: 'intervention_practice',
+                        defaultTitle: activeConcept?.concept_name
+                          ? `${activeConcept.concept_name} · Targeted Practice`
+                          : 'Targeted Practice',
+                      })
+                    }
+                    className="text-[11px] font-semibold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" /> Create Assessment
+                  </button>
+                )}
+              </div>
               <select
                 value={phaseBId}
                 onChange={(e) => setPhaseBId(e.target.value)}
-                className="mt-1.5 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
+                className="mt-1 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
               >
                 <option value="">Select practice assessment</option>
                 {assessments
@@ -452,13 +506,34 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
                     </option>
                   ))}
               </select>
-            </label>
-            <label className="text-xs font-semibold text-slate-700">
-              Phase C · Post-test
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-slate-700">Phase C · Post-test</span>
+                {onCreateAssessment && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onCreateAssessment({
+                        offeringId,
+                        conceptId: activeConceptId || undefined,
+                        conceptName: activeConcept?.concept_name || undefined,
+                        assessmentType: 'intervention_post',
+                        defaultTitle: activeConcept?.concept_name
+                          ? `${activeConcept.concept_name} · Post-Test Reassessment`
+                          : 'Post-Test Reassessment',
+                      })
+                    }
+                    className="text-[11px] font-semibold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" /> Create Assessment
+                  </button>
+                )}
+              </div>
               <select
                 value={phaseCId}
                 onChange={(e) => setPhaseCId(e.target.value)}
-                className="mt-1.5 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
+                className="mt-1 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
               >
                 <option value="">Select comparable reassessment</option>
                 {assessments
@@ -469,7 +544,7 @@ export const TeacherAnalyticsPage: React.FC<{ offerings: CourseOffering[] }> = (
                     </option>
                   ))}
               </select>
-            </label>
+            </div>
             <div className="md:col-span-2">
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <label className="text-xs font-semibold text-slate-700">

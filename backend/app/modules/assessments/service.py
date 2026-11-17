@@ -1,11 +1,14 @@
 from __future__ import annotations
+import io
 import json
 import logging
 import re
 import uuid
+import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import httpx
+import xlsxwriter
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -23,6 +26,7 @@ from app.modules.assessments.models import (
     AssessmentItemScore,
     AssessmentConceptScore,
     StudentLearningNodeProgress,
+    AssessmentStudentOverride,
 )
 from app.modules.assessments.schemas import (
     AssessmentCreate,
@@ -42,11 +46,19 @@ from app.modules.assessments.schemas import (
     QuizAiGenerateRequest,
     QuizAiGenerateResponse,
     QuizAiQuestionOut,
+    FormalQuizCreateRequest,
+    StudentOverrideCreate,
+    StudentOverrideOut,
+    FormalQuizRosterSummaryOut,
+    RosterStudentResultOut,
+    MarkOverrideRequest,
 )
 from app.modules.learning.models import LearningNode, Activity, ActivityVersion
 from app.modules.learning.scoring import evaluate_activity_response
 from app.modules.learning.service import LearningService
-from app.modules.academics.models import CourseOffering, CurriculumSubjectEntry
+from app.modules.academics.models import CourseOffering, CurriculumSubjectEntry, CourseOfferingEnrolment, StudentProgrammeEnrolment
+from app.modules.auth.models import InstitutionMembership, User
+from app.modules.audit.models import AuditEvent
 from app.modules.knowledge.models import Concept, CourseContentConcept, CourseContentVersion
 from app.modules.interventions.models import Intervention, InterventionAssignment
 from app.modules.questions.models import QuestionVersion, QuestionPart
@@ -369,40 +381,95 @@ class AssessmentService:
                 "intervention_practice": Intervention.phase_b_practice_assessment_id,
                 "intervention_post": Intervention.phase_c_assessment_id,
             }[assessment.assessment_type]
-            assignment_stmt = (
-                select(Intervention, InterventionAssignment)
-                .join(InterventionAssignment, InterventionAssignment.intervention_id == Intervention.id)
-                .where(
-                    Intervention.institution_id == tenant_id,
-                    Intervention.course_offering_id == assessment.course_offering_id,
-                    Intervention.status.in_(["active", "published"]),
-                    phase_column == assessment.id,
-                    InterventionAssignment.student_membership_id == student_membership_id,
-                )
+            bound_stmt = select(Intervention.id).where(
+                Intervention.institution_id == tenant_id,
+                Intervention.course_offering_id == assessment.course_offering_id,
+                Intervention.status.in_(["active", "published"]),
+                phase_column == assessment.id,
             )
-            assignments = (await db.execute(assignment_stmt)).all()
-            eligible = False
-            for intervention, assignment in assignments:
-                if assessment.assessment_type == "intervention_baseline":
-                    eligible = True
-                elif assessment.assessment_type == "intervention_practice":
-                    eligible = assignment.phase_a_completed_at is not None
-                else:
-                    eligible = assignment.phase_b_completed_at is not None
-                if eligible:
-                    break
-            if not eligible:
-                raise AppException(
-                    status_code=403,
-                    code="INTERVENTION_PHASE_LOCKED",
-                    message="This assessment is not assigned to you or its intervention phase is still locked.",
+            is_bound = (await db.execute(bound_stmt)).scalars().first() is not None
+
+            if is_bound:
+                assignment_stmt = (
+                    select(Intervention, InterventionAssignment)
+                    .join(InterventionAssignment, InterventionAssignment.intervention_id == Intervention.id)
+                    .where(
+                        Intervention.institution_id == tenant_id,
+                        Intervention.course_offering_id == assessment.course_offering_id,
+                        Intervention.status.in_(["active", "published"]),
+                        phase_column == assessment.id,
+                        InterventionAssignment.student_membership_id == student_membership_id,
+                    )
                 )
+                assignments = (await db.execute(assignment_stmt)).all()
+                eligible = False
+                for intervention, assignment in assignments:
+                    if assessment.assessment_type == "intervention_baseline":
+                        eligible = True
+                    elif assessment.assessment_type == "intervention_practice":
+                        eligible = assignment.phase_a_completed_at is not None
+                    else:
+                        eligible = assignment.phase_b_completed_at is not None
+                    if eligible:
+                        break
+                if not eligible:
+                    raise AppException(
+                        status_code=403,
+                        code="INTERVENTION_PHASE_LOCKED",
+                        message="This assessment is not assigned to you or its intervention phase is still locked.",
+                    )
 
         version = next((v for v in assessment.versions if v.status == "published"), None)
         if not version:
             raise AppException(status_code=404, code="NO_PUBLISHED_VERSION", message="No published version available.")
 
         now = datetime.now(timezone.utc)
+
+        # Check formal quiz window and makeup overrides
+        active_makeup: Optional[AssessmentStudentOverride] = None
+        if assessment.is_formal_quiz:
+            makeup_stmt = select(AssessmentStudentOverride).where(
+                AssessmentStudentOverride.assessment_id == assessment.id,
+                AssessmentStudentOverride.student_membership_id == student_membership_id,
+                AssessmentStudentOverride.override_type == "makeup_window",
+                AssessmentStudentOverride.status == "active",
+            )
+            active_makeup = (await db.execute(makeup_stmt)).scalars().first()
+
+            if active_makeup:
+                if active_makeup.start_at:
+                    start_t = active_makeup.start_at if active_makeup.start_at.tzinfo else active_makeup.start_at.replace(tzinfo=timezone.utc)
+                    if now < start_t:
+                        raise AppException(
+                            status_code=400,
+                            code="QUIZ_NOT_STARTED",
+                            message=f"Makeup quiz window opens at {start_t.isoformat()}.",
+                        )
+                if active_makeup.end_at:
+                    end_t = active_makeup.end_at if active_makeup.end_at.tzinfo else active_makeup.end_at.replace(tzinfo=timezone.utc)
+                    if now > end_t:
+                        raise AppException(
+                            status_code=400,
+                            code="QUIZ_WINDOW_CLOSED",
+                            message="Makeup quiz window has closed.",
+                        )
+            else:
+                if assessment.scheduled_start_at:
+                    start_t = assessment.scheduled_start_at if assessment.scheduled_start_at.tzinfo else assessment.scheduled_start_at.replace(tzinfo=timezone.utc)
+                    if now < start_t:
+                        raise AppException(
+                            status_code=400,
+                            code="QUIZ_NOT_STARTED",
+                            message=f"Formal quiz window opens at {start_t.isoformat()}.",
+                        )
+                if assessment.scheduled_end_at:
+                    end_t = assessment.scheduled_end_at if assessment.scheduled_end_at.tzinfo else assessment.scheduled_end_at.replace(tzinfo=timezone.utc)
+                    if now > end_t:
+                        raise AppException(
+                            status_code=400,
+                            code="QUIZ_WINDOW_CLOSED",
+                            message="Formal quiz window has closed.",
+                        )
 
         # Check existing attempts
         att_stmt = (
@@ -429,16 +496,39 @@ class AssessmentService:
                 else:
                     return await AssessmentService._build_start_attempt_response(db, active_attempt, version)
 
-        # Check max attempts
-        if version.max_attempts and len(existing_attempts) >= version.max_attempts:
+        # Check max attempts: if active_makeup, allowed count is expanded by 1
+        effective_max_attempts = version.max_attempts
+        if active_makeup and effective_max_attempts is not None:
+            effective_max_attempts += 1
+
+        if effective_max_attempts and len(existing_attempts) >= effective_max_attempts:
             raise AppException(
                 status_code=400,
                 code="MAX_ATTEMPTS_REACHED",
-                message=f"Maximum allowed attempts ({version.max_attempts}) reached for this assessment.",
+                message=f"Maximum allowed attempts reached for this assessment. Contact faculty for makeup authorization.",
             )
 
         new_attempt_num = len(existing_attempts) + 1
-        expires_at = now + timedelta(seconds=version.duration_seconds) if version.duration_seconds else None
+
+        # Expiry clamping: latecomer gets only remaining time until scheduled window closes
+        expires_at = None
+        if version.duration_seconds:
+            normal_expiry = now + timedelta(seconds=version.duration_seconds)
+            effective_deadline = None
+            if active_makeup and active_makeup.end_at:
+                effective_deadline = active_makeup.end_at if active_makeup.end_at.tzinfo else active_makeup.end_at.replace(tzinfo=timezone.utc)
+            elif assessment.is_formal_quiz and assessment.scheduled_end_at:
+                effective_deadline = assessment.scheduled_end_at if assessment.scheduled_end_at.tzinfo else assessment.scheduled_end_at.replace(tzinfo=timezone.utc)
+
+            if effective_deadline:
+                expires_at = min(normal_expiry, effective_deadline)
+            else:
+                expires_at = normal_expiry
+        elif assessment.is_formal_quiz and assessment.scheduled_end_at:
+            if active_makeup and active_makeup.end_at:
+                expires_at = active_makeup.end_at if active_makeup.end_at.tzinfo else active_makeup.end_at.replace(tzinfo=timezone.utc)
+            else:
+                expires_at = assessment.scheduled_end_at if assessment.scheduled_end_at.tzinfo else assessment.scheduled_end_at.replace(tzinfo=timezone.utc)
 
         attempt = AssessmentAttempt(
             institution_id=tenant_id,
@@ -454,6 +544,10 @@ class AssessmentService:
         )
         db.add(attempt)
         await db.flush()
+
+        if active_makeup:
+            active_makeup.status = "used"
+            active_makeup.resulting_attempt_id = attempt.id
 
         # Pre-populate empty responses for each item
         for item in version.items:
@@ -488,40 +582,74 @@ class AssessmentService:
         }
 
         # Build items without answer keys
+        assessment = version.assessment
+        if not assessment:
+            assessment = await db.get(Assessment, version.assessment_id)
+
+        items = list(version.items or [])
+        if assessment and assessment.shuffle_questions:
+            # Deterministic per-student attempt shuffle using SHA-256
+            items.sort(key=lambda it: hashlib.sha256(f"{attempt.id}:item:{it.id}".encode("utf-8")).hexdigest())
+
         items_out: List[AssessmentItemOut] = []
-        for it in version.items:
+        for idx, it in enumerate(items, start=1):
             act_v = it.activity_version
             allocs_out = [
                 ConceptAllocationOut(concept_id=a.concept_id, marks_available=float(a.marks_available))
                 for a in it.concept_allocations
             ]
+
+            student_payload = act_v.student_payload_json if act_v else None
+            if student_payload and isinstance(student_payload, dict) and assessment and assessment.shuffle_options:
+                if "options" in student_payload and isinstance(student_payload["options"], list):
+                    opts_copy = list(student_payload["options"])
+                    opts_copy.sort(
+                        key=lambda o: hashlib.sha256(
+                            f"{attempt.id}:opt:{o.get('option_id', '')}".encode("utf-8")
+                        ).hexdigest()
+                    )
+                    student_payload = {**student_payload, "options": opts_copy}
+
+            q_parts = []
+            for part in (it.question_version.parts if it.question_version else []):
+                part_opts = [
+                    StudentQuestionOptionOut(
+                        id=option.id,
+                        option_key=option.option_key,
+                        display_text=option.display_text,
+                    ) for option in part.options
+                ]
+                if assessment and assessment.shuffle_options:
+                    part_opts.sort(
+                        key=lambda o: hashlib.sha256(
+                            f"{attempt.id}:opt:{o.id}".encode("utf-8")
+                        ).hexdigest()
+                    )
+                q_parts.append(
+                    StudentQuestionPartOut(
+                        id=part.id,
+                        part_key=part.part_key,
+                        part_prompt=part.part_prompt,
+                        sequence_no=part.sequence_no,
+                        marks_available=float(part.marks_available),
+                        answer_type=part.answer_type,
+                        options=part_opts,
+                    )
+                )
+
             items_out.append(
                 AssessmentItemOut(
                     id=it.id,
-                    sequence_no=it.sequence_no,
+                    sequence_no=idx,
                     marks_available=float(it.marks_available),
                     is_required=it.is_required,
                     question_version_id=it.question_version_id,
                     activity_version_id=it.activity_version_id,
                     activity_type=act_v.activity_type if act_v else None,
                     title=act_v.title if act_v else None,
-                    student_payload_json=act_v.student_payload_json if act_v else None,
+                    student_payload_json=student_payload,
                     question_prompt=(it.question_version.prompt_text if it.question_version else None),
-                    question_parts=[
-                        StudentQuestionPartOut(
-                            id=part.id,
-                            part_key=part.part_key,
-                            part_prompt=part.part_prompt,
-                            sequence_no=part.sequence_no,
-                            marks_available=float(part.marks_available),
-                            answer_type=part.answer_type,
-                            options=[StudentQuestionOptionOut(
-                                id=option.id,
-                                option_key=option.option_key,
-                                display_text=option.display_text,
-                            ) for option in part.options],
-                        ) for part in (it.question_version.parts if it.question_version else [])
-                    ],
+                    question_parts=q_parts,
                     concept_allocations=allocs_out,
                 )
             )
@@ -898,6 +1026,14 @@ class AssessmentService:
             title=assessment.title,
             description=assessment.description,
             status=assessment.status,
+            is_formal_quiz=bool(assessment.is_formal_quiz),
+            scheduled_start_at=assessment.scheduled_start_at,
+            scheduled_end_at=assessment.scheduled_end_at,
+            shuffle_questions=bool(assessment.shuffle_questions),
+            shuffle_options=bool(assessment.shuffle_options),
+            is_finalized=bool(assessment.is_finalized),
+            finalized_at=assessment.finalized_at,
+            finalized_by_user_id=assessment.finalized_by_user_id,
             created_at=assessment.created_at,
             latest_version=version_out,
         )
@@ -1049,7 +1185,7 @@ class AssessmentService:
             institution_id=tenant_id,
             course_offering_id=offering_id,
             learning_node_id=node.id,
-            assessment_type="node_practice",
+            assessment_type=data.assessment_type,
             title=data.title.strip(),
             description=(data.description or "").strip() or None,
             status=target_status,
@@ -1063,7 +1199,7 @@ class AssessmentService:
             assessment_id=assessment.id,
             version_number=1,
             status=target_status,
-            duration_seconds=data.time_limit_minutes * 60,
+            duration_seconds=(data.time_limit_minutes * 60) if data.time_limit_minutes else None,
             max_attempts=None,
             published_at=now if data.publish else None,
             created_by_user_id=user_id,
@@ -1456,10 +1592,21 @@ class AssessmentService:
         is_finalized = attempt.status in ("submitted", "expired")
         resp_by_item = {r.assessment_item_id: (r.response_payload_json or {}) for r in (attempt.responses or [])}
 
+        # For unfinalized formal quizzes, suppress correct answers and explanations to prevent cheating
+        asmt_stmt = (
+            select(Assessment)
+            .join(AssessmentVersion, AssessmentVersion.assessment_id == Assessment.id)
+            .where(AssessmentVersion.id == attempt.assessment_version_id)
+        )
+        asmt = (await db.execute(asmt_stmt)).scalars().first()
+        show_solutions = is_finalized
+        if asmt and asmt.is_formal_quiz and not asmt.is_finalized:
+            show_solutions = False
+
         item_scores_out: List[ItemScoreOut] = []
         for sc in attempt.item_scores:
             act_v = sc.item.activity_version if sc.item else None
-            ans_key = (act_v.answer_key_json or {}) if (is_finalized and act_v) else {}
+            ans_key = (act_v.answer_key_json or {}) if (show_solutions and act_v) else {}
             chosen_payload = resp_by_item.get(sc.assessment_item_id, {})
             item_scores_out.append(
                 ItemScoreOut(
@@ -1469,8 +1616,8 @@ class AssessmentService:
                     marks_available=float(sc.marks_available),
                     result_status=sc.result_status,
                     selected_option_id=chosen_payload.get("selected_option_id") if is_finalized else None,
-                    correct_option_id=ans_key.get("correct_option_id") if is_finalized else None,
-                    explanation=ans_key.get("explanation") if is_finalized else None,
+                    correct_option_id=ans_key.get("correct_option_id") if show_solutions else None,
+                    explanation=ans_key.get("explanation") if show_solutions else None,
                 )
             )
 
@@ -1500,4 +1647,612 @@ class AssessmentService:
             item_scores=item_scores_out,
             concept_scores=concept_scores_out,
         )
+
+    @staticmethod
+    async def create_formal_quiz(
+        db: AsyncSession,
+        offering_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        data: FormalQuizCreateRequest,
+    ) -> Assessment:
+        """Create a scheduled credit-bearing formal academic quiz with MCQ items."""
+        offering = await db.get(CourseOffering, offering_id)
+        if not offering or offering.institution_id != tenant_id:
+            raise AppException(status_code=404, code="OFFERING_NOT_FOUND", message="Course offering not found.")
+
+        if data.scheduled_start_at and data.scheduled_end_at:
+            start_t = data.scheduled_start_at if data.scheduled_start_at.tzinfo else data.scheduled_start_at.replace(tzinfo=timezone.utc)
+            end_t = data.scheduled_end_at if data.scheduled_end_at.tzinfo else data.scheduled_end_at.replace(tzinfo=timezone.utc)
+            if end_t <= start_t:
+                raise AppException(
+                    status_code=400,
+                    code="INVALID_QUIZ_WINDOW",
+                    message="Formal quiz scheduled_end_at must be strictly after scheduled_start_at.",
+                )
+
+        node_stmt = (
+            select(LearningNode)
+            .where(
+                LearningNode.course_offering_id == offering_id,
+                LearningNode.institution_id == tenant_id,
+            )
+            .order_by(LearningNode.sequence_no.asc())
+            .limit(1)
+        )
+        node = (await db.execute(node_stmt)).scalars().first()
+        if not node:
+            cv_stmt = (
+                select(CourseContentVersion)
+                .where(
+                    CourseContentVersion.course_offering_id == offering_id,
+                    CourseContentVersion.institution_id == tenant_id,
+                )
+                .order_by(CourseContentVersion.version_number.desc())
+                .limit(1)
+            )
+            content_v = (await db.execute(cv_stmt)).scalars().first()
+            if not content_v:
+                content_v = await KnowledgeService.get_or_create_draft_version(
+                    db=db, offering_id=offering_id, tenant_id=tenant_id, user_id=user_id
+                )
+            node = LearningNode(
+                institution_id=tenant_id,
+                course_offering_id=offering_id,
+                course_content_version_id=content_v.id,
+                node_code="FORMAL_QUIZZES",
+                title="Formal Quizzes & Academic Assessments",
+                description="Credit-bearing departmental quizzes and evaluations.",
+                sequence_no=1,
+                status="published",
+                published_at=datetime.now(timezone.utc),
+                created_by_user_id=user_id,
+            )
+            db.add(node)
+            await db.flush()
+
+        now = datetime.now(timezone.utc)
+        target_status = "published" if data.publish else "draft"
+
+        assessment = Assessment(
+            institution_id=tenant_id,
+            course_offering_id=offering_id,
+            learning_node_id=node.id,
+            assessment_type="node_practice",
+            title=data.title.strip(),
+            description=(data.description or "").strip() or None,
+            status=target_status,
+            is_formal_quiz=True,
+            scheduled_start_at=data.scheduled_start_at,
+            scheduled_end_at=data.scheduled_end_at,
+            shuffle_questions=data.shuffle_questions,
+            shuffle_options=data.shuffle_options,
+            is_finalized=False,
+            created_by_user_id=user_id,
+        )
+        db.add(assessment)
+        await db.flush()
+
+        version = AssessmentVersion(
+            institution_id=tenant_id,
+            assessment_id=assessment.id,
+            version_number=1,
+            status=target_status,
+            duration_seconds=(data.time_limit_minutes * 60) if data.time_limit_minutes else None,
+            max_attempts=1,
+            published_at=now if data.publish else None,
+            created_by_user_id=user_id,
+        )
+        db.add(version)
+        await db.flush()
+
+        course_concepts = await _load_course_concepts(db, offering_id, tenant_id)
+        explicit_requested_ids = {cid for q_in in data.questions for cid in q_in.concept_ids}
+        valid_explicit_ids: set[uuid.UUID] = set()
+        if explicit_requested_ids:
+            found_rows = (
+                await db.execute(
+                    select(Concept.id).where(
+                        Concept.id.in_(explicit_requested_ids),
+                        Concept.institution_id == tenant_id,
+                    )
+                )
+            ).scalars().all()
+            valid_explicit_ids = set(found_rows)
+
+        for seq, q_in in enumerate(data.questions, start=1):
+            if q_in.correct_index >= len(q_in.options):
+                raise AppException(
+                    status_code=400,
+                    code="INVALID_QUIZ_OPTION",
+                    message=f"Question {seq} correct option index is out of range.",
+                )
+
+            opt_items = [
+                {"option_id": f"opt_{idx + 1}", "text": opt_text.strip() or f"Option {idx + 1}"}
+                for idx, opt_text in enumerate(q_in.options)
+            ]
+            authoring_payload = {
+                "question": q_in.statement.strip(),
+                "options": opt_items,
+                "correct_option_id": opt_items[q_in.correct_index]["option_id"],
+                "explanation": (q_in.explanation or "").strip() or None,
+            }
+            student_payload, answer_key = LearningService.sanitize_authoring_payload("mcq", authoring_payload)
+
+            activity = Activity(
+                institution_id=tenant_id,
+                learning_node_id=node.id,
+                created_by_user_id=user_id,
+                status="active",
+            )
+            db.add(activity)
+            await db.flush()
+
+            act_v = ActivityVersion(
+                institution_id=tenant_id,
+                activity_id=activity.id,
+                version_number=1,
+                activity_type="mcq",
+                schema_version=1,
+                title=f"Q{seq}: {q_in.statement.strip()[:120]}",
+                student_payload_json=student_payload,
+                answer_key_json=answer_key,
+                scoring_config_json={
+                    "max_marks": float(q_in.marks),
+                    "negative_marks": 0.0,
+                    "origin_type": q_in.origin_type,
+                    "source_chunk_ids": [str(source_id) for source_id in q_in.source_chunk_ids],
+                },
+                approval_status="approved",
+                created_by_user_id=user_id,
+                approved_by_user_id=user_id,
+                approved_at=now,
+            )
+            db.add(act_v)
+            await db.flush()
+
+            item = AssessmentItem(
+                institution_id=tenant_id,
+                assessment_version_id=version.id,
+                activity_version_id=act_v.id,
+                sequence_no=seq,
+                marks_available=float(q_in.marks),
+                is_required=True,
+            )
+            db.add(item)
+            await db.flush()
+
+            resolved_concept_ids = [cid for cid in q_in.concept_ids if cid in valid_explicit_ids]
+            if not resolved_concept_ids and course_concepts:
+                resolved_concept_ids = _match_concepts_for_text(
+                    course_concepts,
+                    f"{q_in.statement} {q_in.explanation or ''}",
+                )
+                if not resolved_concept_ids:
+                    resolved_concept_ids = _match_concepts_for_text(
+                        course_concepts,
+                        f"{data.title} {data.description or ''}",
+                    )
+            _allocate_item_concepts(db, tenant_id, item.id, float(q_in.marks), resolved_concept_ids)
+
+        await db.commit()
+        return await AssessmentService.load_assessment_full(db, assessment.id, tenant_id)
+
+    @staticmethod
+    async def grant_student_override(
+        db: AsyncSession,
+        assessment_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        data: StudentOverrideCreate,
+    ) -> AssessmentStudentOverride:
+        """Grant a student an individual makeup window or record confirmed absence."""
+        assessment = await db.get(Assessment, assessment_id)
+        if not assessment or assessment.institution_id != tenant_id:
+            raise AppException(status_code=404, code="ASSESSMENT_NOT_FOUND", message="Assessment not found.")
+
+        enrolment_stmt = select(CourseOfferingEnrolment).where(
+            CourseOfferingEnrolment.course_offering_id == assessment.course_offering_id,
+            CourseOfferingEnrolment.institution_membership_id == data.student_membership_id,
+            CourseOfferingEnrolment.enrolment_status == "active",
+        )
+        enrolment = (await db.execute(enrolment_stmt)).scalars().first()
+        if not enrolment:
+            raise AppException(
+                status_code=400,
+                code="STUDENT_NOT_ENROLLED",
+                message="Student is not actively enrolled in this course offering.",
+            )
+
+        if data.override_type == "makeup_window":
+            if not data.start_at or not data.end_at:
+                raise AppException(
+                    status_code=400,
+                    code="INVALID_MAKEUP_WINDOW",
+                    message="Both start_at and end_at are required for a makeup window.",
+                )
+            start_t = data.start_at if data.start_at.tzinfo else data.start_at.replace(tzinfo=timezone.utc)
+            end_t = data.end_at if data.end_at.tzinfo else data.end_at.replace(tzinfo=timezone.utc)
+            if end_t <= start_t:
+                raise AppException(
+                    status_code=400,
+                    code="INVALID_MAKEUP_WINDOW",
+                    message="Makeup window end_at must be strictly after start_at.",
+                )
+
+            # Supersede any existing active makeup grant for this student
+            existing_active_stmt = select(AssessmentStudentOverride).where(
+                AssessmentStudentOverride.assessment_id == assessment_id,
+                AssessmentStudentOverride.student_membership_id == data.student_membership_id,
+                AssessmentStudentOverride.override_type == "makeup_window",
+                AssessmentStudentOverride.status == "active",
+            )
+            existing_active = (await db.execute(existing_active_stmt)).scalars().all()
+            for row in existing_active:
+                row.status = "superseded"
+
+        override = AssessmentStudentOverride(
+            institution_id=tenant_id,
+            assessment_id=assessment_id,
+            student_membership_id=data.student_membership_id,
+            override_type=data.override_type,
+            status="active",
+            start_at=data.start_at,
+            end_at=data.end_at,
+            reason=data.reason.strip(),
+            granted_by_user_id=user_id,
+        )
+        db.add(override)
+        await db.commit()
+        await db.refresh(override)
+        return override
+
+    @staticmethod
+    async def override_attempt_marks(
+        db: AsyncSession,
+        attempt_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        data: MarkOverrideRequest,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> AssessmentAttempt:
+        """Faculty override of an attempt's total marks with immutable audit log."""
+        attempt = await db.get(AssessmentAttempt, attempt_id)
+        if not attempt or attempt.institution_id != tenant_id:
+            raise AppException(status_code=404, code="ATTEMPT_NOT_FOUND", message="Attempt not found.")
+
+        old_effective = float(attempt.faculty_override_marks if attempt.faculty_override_marks is not None else (attempt.marks_awarded or 0.0))
+
+        attempt.faculty_override_marks = data.marks
+        attempt.override_reason = data.reason.strip()
+        attempt.override_by_user_id = user_id
+
+        audit = AuditEvent(
+            institution_id=tenant_id,
+            actor_user_id=user_id,
+            event_code="ASSESSMENT_MARK_OVERRIDE",
+            target_type="assessment_attempt",
+            target_id=str(attempt.id),
+            payload_json={
+                "original_marks_awarded": float(attempt.marks_awarded or 0.0),
+                "previous_effective_marks": old_effective,
+                "new_override_marks": float(data.marks),
+                "delta": round(float(data.marks) - old_effective, 2),
+                "reason": data.reason.strip(),
+                "student_membership_id": str(attempt.student_membership_id),
+            },
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        db.add(audit)
+        await db.commit()
+        await db.refresh(attempt)
+        return attempt
+
+    @staticmethod
+    async def finalize_quiz_marks(
+        db: AsyncSession,
+        assessment_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Assessment:
+        """Lock formal quiz marks so that results become official and solutions are visible."""
+        assessment = await db.get(Assessment, assessment_id)
+        if not assessment or assessment.institution_id != tenant_id:
+            raise AppException(status_code=404, code="ASSESSMENT_NOT_FOUND", message="Assessment not found.")
+
+        now = datetime.now(timezone.utc)
+        assessment.is_finalized = True
+        assessment.finalized_at = now
+        assessment.finalized_by_user_id = user_id
+
+        audit = AuditEvent(
+            institution_id=tenant_id,
+            actor_user_id=user_id,
+            event_code="ASSESSMENT_FINALIZED",
+            target_type="assessment",
+            target_id=str(assessment.id),
+            payload_json={
+                "quiz_title": assessment.title,
+                "finalized_at": now.isoformat(),
+            },
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        db.add(audit)
+        await db.commit()
+        return await AssessmentService.load_assessment_full(db, assessment.id, tenant_id)
+
+    @staticmethod
+    async def get_formal_quiz_roster(
+        db: AsyncSession,
+        assessment_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+    ) -> FormalQuizRosterSummaryOut:
+        """Full course offering roster evaluation for formal quiz grading and attendance."""
+        assessment = await db.get(Assessment, assessment_id)
+        if not assessment or assessment.institution_id != tenant_id:
+            raise AppException(status_code=404, code="ASSESSMENT_NOT_FOUND", message="Assessment not found.")
+
+        v_stmt = (
+            select(AssessmentVersion)
+            .options(selectinload(AssessmentVersion.items))
+            .where(
+                AssessmentVersion.assessment_id == assessment_id,
+                AssessmentVersion.institution_id == tenant_id,
+            )
+            .order_by(AssessmentVersion.version_number.desc())
+        )
+        version = (await db.execute(v_stmt)).scalars().first()
+        max_marks = sum(float(it.marks_available) for it in (version.items or [])) if version else 0.0
+
+        enrolments_stmt = (
+            select(CourseOfferingEnrolment, InstitutionMembership, User, StudentProgrammeEnrolment)
+            .join(InstitutionMembership, InstitutionMembership.id == CourseOfferingEnrolment.institution_membership_id)
+            .join(User, User.id == InstitutionMembership.user_id)
+            .options(selectinload(User.identifiers))
+            .outerjoin(StudentProgrammeEnrolment, StudentProgrammeEnrolment.institution_membership_id == InstitutionMembership.id)
+            .where(
+                CourseOfferingEnrolment.course_offering_id == assessment.course_offering_id,
+                CourseOfferingEnrolment.institution_id == tenant_id,
+                CourseOfferingEnrolment.enrolment_status == "active",
+            )
+            .order_by(User.display_name.asc())
+        )
+        enrolled_rows = (await db.execute(enrolments_stmt)).all()
+
+        attempts_stmt = (
+            select(AssessmentAttempt)
+            .where(
+                AssessmentAttempt.assessment_version_id == version.id,
+                AssessmentAttempt.institution_id == tenant_id,
+            )
+            .order_by(AssessmentAttempt.attempt_number.desc())
+        ) if version else None
+        all_attempts = (await db.execute(attempts_stmt)).scalars().all() if attempts_stmt is not None else []
+
+        attempts_by_student: Dict[uuid.UUID, List[AssessmentAttempt]] = {}
+        for att in all_attempts:
+            attempts_by_student.setdefault(att.student_membership_id, []).append(att)
+
+        overrides_stmt = (
+            select(AssessmentStudentOverride)
+            .where(
+                AssessmentStudentOverride.assessment_id == assessment_id,
+                AssessmentStudentOverride.institution_id == tenant_id,
+            )
+            .order_by(AssessmentStudentOverride.created_at.desc())
+        )
+        all_overrides = (await db.execute(overrides_stmt)).scalars().all()
+        overrides_by_student: Dict[uuid.UUID, List[AssessmentStudentOverride]] = {}
+        for ov in all_overrides:
+            overrides_by_student.setdefault(ov.student_membership_id, []).append(ov)
+
+        students_out: List[RosterStudentResultOut] = []
+        count_submitted = 0
+        count_absent = 0
+        count_makeup = 0
+        count_unattempted = 0
+
+        for enrolment, membership, user, prog in enrolled_rows:
+            mem_id = membership.id
+            stu_attempts = attempts_by_student.get(mem_id, [])
+            stu_overrides = overrides_by_student.get(mem_id, [])
+
+            active_makeup_obj = next((ov for ov in stu_overrides if ov.override_type == "makeup_window" and ov.status == "active"), None)
+            confirmed_absence = next((ov for ov in stu_overrides if ov.override_type == "confirmed_absence" and ov.status == "active"), None)
+
+            submitted_attempt = next((a for a in stu_attempts if a.status in ("submitted", "expired")), None)
+
+            if submitted_attempt:
+                raw_awarded = float(submitted_attempt.marks_awarded) if submitted_attempt.marks_awarded is not None else 0.0
+                override_awarded = float(submitted_attempt.faculty_override_marks) if submitted_attempt.faculty_override_marks is not None else None
+                effective = override_awarded if override_awarded is not None else raw_awarded
+                row_status = "submitted"
+                count_submitted += 1
+                attempt_id = submitted_attempt.id
+                attempt_no = submitted_attempt.attempt_number
+                started_at = submitted_attempt.started_at
+                submitted_at = submitted_attempt.submitted_at
+                override_reason = submitted_attempt.override_reason
+            elif active_makeup_obj:
+                raw_awarded = None
+                override_awarded = None
+                effective = None
+                row_status = "makeup_pending"
+                count_makeup += 1
+                attempt_id = None
+                attempt_no = None
+                started_at = None
+                submitted_at = None
+                override_reason = active_makeup_obj.reason
+            elif confirmed_absence:
+                raw_awarded = None
+                override_awarded = None
+                effective = None
+                row_status = "absent"
+                count_absent += 1
+                attempt_id = None
+                attempt_no = None
+                started_at = None
+                submitted_at = None
+                override_reason = confirmed_absence.reason
+            else:
+                raw_awarded = None
+                override_awarded = None
+                effective = None
+                row_status = "not_attempted"
+                count_unattempted += 1
+                attempt_id = None
+                attempt_no = None
+                started_at = None
+                submitted_at = None
+                override_reason = None
+
+            email = next((i.identifier_value for i in (user.identifiers or []) if i.identifier_type == "email"), None)
+            students_out.append(
+                RosterStudentResultOut(
+                    student_membership_id=mem_id,
+                    student_user_id=user.id,
+                    full_name=user.display_name or user.legal_name or "Student",
+                    registration_number=prog.registration_number if prog else None,
+                    roll_number=getattr(prog, "roll_number", None),
+                    email=email,
+                    status=row_status,
+                    attempt_id=attempt_id,
+                    attempt_number=attempt_no,
+                    started_at=started_at,
+                    submitted_at=submitted_at,
+                    raw_marks_awarded=raw_awarded,
+                    faculty_override_marks=override_awarded,
+                    effective_marks=effective,
+                    marks_available=max_marks,
+                    override_reason=override_reason,
+                    active_makeup=StudentOverrideOut.model_validate(active_makeup_obj) if active_makeup_obj else None,
+                )
+            )
+
+        return FormalQuizRosterSummaryOut(
+            quiz_id=assessment.id,
+            quiz_title=assessment.title,
+            course_offering_id=assessment.course_offering_id,
+            is_finalized=assessment.is_finalized,
+            finalized_at=assessment.finalized_at,
+            total_enrolled=len(enrolled_rows),
+            total_submitted=count_submitted,
+            total_absent=count_absent,
+            total_makeup_pending=count_makeup,
+            total_not_attempted=count_unattempted,
+            students=students_out,
+        )
+
+    @staticmethod
+    async def export_formal_quiz_excel(
+        db: AsyncSession,
+        assessment_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+    ) -> bytes:
+        """Generate departmental grade spreadsheet (.xlsx) for formal quiz records."""
+        roster = await AssessmentService.get_formal_quiz_roster(db, assessment_id, tenant_id)
+
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {"in_memory": True})
+        worksheet = workbook.add_worksheet("Quiz Marks")
+
+        title_fmt = workbook.add_format({"bold": True, "font_size": 13, "font_color": "#0F172A", "align": "left"})
+        meta_fmt = workbook.add_format({"font_size": 10, "font_color": "#475569"})
+        header_fmt = workbook.add_format({
+            "bold": True,
+            "font_size": 10,
+            "bg_color": "#0F172A",
+            "font_color": "#FFFFFF",
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+        })
+        cell_center = workbook.add_format({"font_size": 10, "align": "center", "border": 1})
+        cell_left = workbook.add_format({"font_size": 10, "align": "left", "border": 1})
+        cell_num = workbook.add_format({"font_size": 10, "align": "right", "num_format": "0.00", "border": 1})
+        status_submitted = workbook.add_format({"font_size": 10, "align": "center", "bg_color": "#DCFCE7", "font_color": "#15803D", "border": 1})
+        status_absent = workbook.add_format({"font_size": 10, "align": "center", "bg_color": "#FEE2E2", "font_color": "#B91C1C", "border": 1})
+        status_makeup = workbook.add_format({"font_size": 10, "align": "center", "bg_color": "#FEF3C7", "font_color": "#B45309", "border": 1})
+        status_unattempted = workbook.add_format({"font_size": 10, "align": "center", "bg_color": "#F1F5F9", "font_color": "#64748B", "border": 1})
+
+        worksheet.write(0, 0, f"DOUBTDESK ACADEMIC EVALUATION: {roster.quiz_title}", title_fmt)
+        worksheet.write(1, 0, f"Course Offering: {roster.course_offering_id} | Finalized: {'Yes' if roster.is_finalized else 'No'} | Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", meta_fmt)
+        worksheet.write(2, 0, f"Enrolled: {roster.total_enrolled} | Submitted: {roster.total_submitted} | Absent: {roster.total_absent} | Makeup Pending: {roster.total_makeup_pending} | Unattempted: {roster.total_not_attempted}", meta_fmt)
+
+        headers = [
+            "Sl No.",
+            "Registration No.",
+            "Roll No.",
+            "Student Name",
+            "Email",
+            "Status",
+            "Raw Marks",
+            "Faculty Override",
+            "Final Marks",
+            "Max Marks",
+            "Score %",
+            "Override / Absence Reason",
+        ]
+
+        worksheet.set_row(4, 25)
+        for col_idx, h in enumerate(headers):
+            worksheet.write(4, col_idx, h, header_fmt)
+
+        for row_idx, stu in enumerate(roster.students, start=5):
+            st_fmt = cell_center
+            if stu.status == "submitted":
+                st_fmt = status_submitted
+            elif stu.status == "absent":
+                st_fmt = status_absent
+            elif stu.status == "makeup_pending":
+                st_fmt = status_makeup
+            elif stu.status == "not_attempted":
+                st_fmt = status_unattempted
+
+            pct = f"{(stu.effective_marks / stu.marks_available * 100):.1f}%" if stu.effective_marks is not None and stu.marks_available > 0 else "-"
+
+            worksheet.write(row_idx, 0, row_idx - 4, cell_center)
+            worksheet.write(row_idx, 1, stu.registration_number or "-", cell_center)
+            worksheet.write(row_idx, 2, stu.roll_number or "-", cell_center)
+            worksheet.write(row_idx, 3, stu.full_name, cell_left)
+            worksheet.write(row_idx, 4, stu.email or "-", cell_left)
+            worksheet.write(row_idx, 5, stu.status.upper().replace("_", " "), st_fmt)
+
+            if stu.raw_marks_awarded is not None:
+                worksheet.write_number(row_idx, 6, stu.raw_marks_awarded, cell_num)
+            else:
+                worksheet.write(row_idx, 6, "-", cell_center)
+
+            if stu.faculty_override_marks is not None:
+                worksheet.write_number(row_idx, 7, stu.faculty_override_marks, cell_num)
+            else:
+                worksheet.write(row_idx, 7, "-", cell_center)
+
+            if stu.effective_marks is not None:
+                worksheet.write_number(row_idx, 8, stu.effective_marks, cell_num)
+            else:
+                worksheet.write(row_idx, 8, "-", cell_center)
+
+            worksheet.write_number(row_idx, 9, stu.marks_available, cell_num)
+            worksheet.write(row_idx, 10, pct, cell_center)
+            worksheet.write(row_idx, 11, stu.override_reason or "-", cell_left)
+
+        worksheet.set_column(0, 0, 8)
+        worksheet.set_column(1, 2, 16)
+        worksheet.set_column(3, 3, 24)
+        worksheet.set_column(4, 4, 26)
+        worksheet.set_column(5, 5, 16)
+        worksheet.set_column(6, 9, 14)
+        worksheet.set_column(10, 10, 12)
+        worksheet.set_column(11, 11, 32)
+
+        workbook.close()
+        return output.getvalue()
 
