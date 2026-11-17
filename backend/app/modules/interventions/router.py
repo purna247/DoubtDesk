@@ -13,6 +13,8 @@ from app.modules.auth.models import InstitutionMembership
 from app.modules.interventions.models import Intervention, InterventionAssignment
 from app.modules.knowledge.service import KnowledgeService
 from app.modules.interventions.service import InterventionService
+from app.modules.interventions.authoring import generate_draft, approve_draft
+from app.modules.interventions.authoring_schemas import GenerateInterventionRequest, InterventionDraft, ApproveInterventionDraft
 from app.modules.interventions.schemas import (
     InterventionCreate,
     InterventionOut,
@@ -32,6 +34,52 @@ def _get_tenant_id(user: UserProfile) -> uuid.UUID:
     return uuid.UUID(user.institution_id)
 
 
+@router.post("/generate-draft", response_model=InterventionDraft)
+async def generate_intervention_draft(
+    course_offering_id: uuid.UUID,
+    req: GenerateInterventionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_teacher),
+):
+    tenant_id = _get_tenant_id(current_user)
+    await InterventionService.verify_teacher_course_access(db, tenant_id, course_offering_id, current_user)
+    return await generate_draft(db, tenant_id, course_offering_id, req)
+
+
+@router.post("/approve-draft", response_model=InterventionOut, status_code=status.HTTP_201_CREATED)
+async def approve_intervention_draft(
+    course_offering_id: uuid.UUID,
+    req: ApproveInterventionDraft,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_teacher),
+):
+    tenant_id = _get_tenant_id(current_user)
+    await InterventionService.verify_teacher_course_access(db, tenant_id, course_offering_id, current_user)
+    intervention = await approve_draft(db, tenant_id, course_offering_id, uuid.UUID(current_user.id), req)
+    rows = await InterventionService.list_course_interventions(db, tenant_id, course_offering_id)
+    return next(row for row in rows if row.id == intervention.id)
+
+
+@router.post("/approve-existing", response_model=InterventionOut, status_code=status.HTTP_201_CREATED)
+async def approve_existing_intervention(
+    course_offering_id: uuid.UUID,
+    req: InterventionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_teacher),
+):
+    tenant_id = _get_tenant_id(current_user)
+    await InterventionService.verify_teacher_course_access(db, tenant_id, course_offering_id, current_user)
+    req.require_primer_acknowledgment = True
+    intervention = await InterventionService.create_intervention(
+        db, tenant_id, course_offering_id, req, uuid.UUID(current_user.id), commit=False
+    )
+    await InterventionService.approve_and_publish_intervention(
+        db, tenant_id, course_offering_id, intervention.id, uuid.UUID(current_user.id)
+    )
+    rows = await InterventionService.list_course_interventions(db, tenant_id, course_offering_id)
+    return next(row for row in rows if row.id == intervention.id)
+
+
 @router.post("/draft-primer", response_model=PrimerDraftResponse)
 async def draft_intervention_primer(
     course_offering_id: uuid.UUID,
@@ -40,8 +88,8 @@ async def draft_intervention_primer(
     current_user: UserProfile = Depends(require_teacher),
 ) -> PrimerDraftResponse:
     """
-    Teacher calls AI assistant to draft a targeted Phase B intervention primer
-    addressing recorded cohort doubts and assessment misconceptions.
+    Draft an evidence outline from concept definitions, doubts and misconceptions.
+    Use generate-draft for an AI-written guide and matched quizzes.
     """
     tenant_id = _get_tenant_id(current_user)
     await InterventionService.verify_teacher_course_access(
@@ -175,6 +223,47 @@ async def get_student_intervention_view(
         course_offering_id=course_offering_id,
         intervention_id=intervention_id,
         student_membership_id=mem.id,
+    )
+
+
+@router.post("/{intervention_id}/acknowledge-study-guide", response_model=StudentInterventionViewOut)
+async def acknowledge_study_guide(
+    course_offering_id: uuid.UUID,
+    intervention_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_student),
+):
+    """Record a student's acknowledgment; this does not assert comprehension."""
+    from datetime import datetime, timezone
+
+    tenant_id = _get_tenant_id(current_user)
+    await KnowledgeService.verify_student_access(
+        db=db, offering_id=course_offering_id, tenant_id=tenant_id, user_id=uuid.UUID(current_user.id)
+    )
+    membership = (await db.execute(select(InstitutionMembership).where(
+        InstitutionMembership.user_id == uuid.UUID(current_user.id),
+        InstitutionMembership.institution_id == tenant_id,
+        InstitutionMembership.membership_status == "active",
+    ))).scalars().first()
+    if not membership:
+        raise AppException(status_code=403, code="NOT_A_MEMBER", message="Active membership required.")
+    view = await InterventionService.get_student_intervention_view(
+        db, tenant_id, course_offering_id, intervention_id, membership.id
+    )
+    if not view.phase_b_unlocked:
+        raise AppException(status_code=403, code="STUDY_GUIDE_LOCKED", message="Submit the baseline before reviewing the study guide.")
+    if not view.phase_b_primer_content:
+        raise AppException(status_code=400, code="STUDY_GUIDE_REQUIRED", message="No study guide is attached.")
+    assignment = (await db.execute(select(InterventionAssignment).where(
+        InterventionAssignment.intervention_id == intervention_id,
+        InterventionAssignment.student_membership_id == membership.id,
+        InterventionAssignment.institution_id == tenant_id,
+    ))).scalars().one()
+    if assignment.phase_b_primer_acknowledged_at is None:
+        assignment.phase_b_primer_acknowledged_at = datetime.now(timezone.utc)
+        await db.flush()
+    return await InterventionService.get_student_intervention_view(
+        db, tenant_id, course_offering_id, intervention_id, membership.id
     )
 
 

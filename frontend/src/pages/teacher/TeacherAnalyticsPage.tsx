@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, BarChart3, Check, Loader2, Plus, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react';
+import { AlertCircle, BarChart3, Check, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { MisconceptionReportPanel } from '../../components/academic/MisconceptionReportPanel';
 import { useCourseMisconceptions } from '../../hooks/useCourseMisconceptions';
 import type { CourseOffering } from '../../types/academics';
+import { InterventionAuthoringPanel } from '../../components/academic/InterventionAuthoringPanel';
 import type { Assessment } from '../../types/assessments';
 
 interface ConceptAnalytics {
@@ -88,24 +89,16 @@ export interface CreateAssessmentIntent {
 export const TeacherAnalyticsPage: React.FC<{
   offerings: CourseOffering[];
   onCreateAssessment?: (intent: CreateAssessmentIntent) => void;
-}> = ({ offerings, onCreateAssessment }) => {
+}> = ({ offerings }) => {
   const [offeringId, setOfferingId] = useState('');
   const [rows, setRows] = useState<ConceptAnalytics[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [interventions, setInterventions] = useState<Intervention[]>([]);
   const [detail, setDetail] = useState<ConceptDetail | null>(null);
   const [activeConceptId, setActiveConceptId] = useState<string | null>(null);
-  const activeConcept = rows.find((r) => r.concept_id === activeConceptId);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
-  const [title, setTitle] = useState('');
-  const [primer, setPrimer] = useState('');
-  const [phaseAId, setPhaseAId] = useState('');
-  const [phaseBId, setPhaseBId] = useState('');
-  const [phaseCId, setPhaseCId] = useState('');
   const [report, setReport] = useState<InterventionReport | null>(null);
   const [loading, setLoading] = useState(false);
-  const [savingIntervention, setSavingIntervention] = useState(false);
-  const [draftingPrimer, setDraftingPrimer] = useState(false);
   const [message, setMessage] = useState('');
 
   const {
@@ -141,6 +134,10 @@ export const TeacherAnalyticsPage: React.FC<{
   };
 
   useEffect(() => {
+    setDetail(null);
+    setActiveConceptId(null);
+    setSelectedStudents([]);
+    setReport(null);
     void loadAnalytics();
   }, [offeringId]);
 
@@ -171,59 +168,6 @@ export const TeacherAnalyticsPage: React.FC<{
 
   const toggleStudent = (id: string) =>
     setSelectedStudents((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id]));
-
-  const createIntervention = async () => {
-    if (!offeringId || !activeConceptId || !selectedStudents.length || !phaseAId || !phaseBId || !phaseCId || !title.trim()) return;
-    setSavingIntervention(true);
-    try {
-      const intervention = await apiClient.post<Intervention>(`/api/v1/courses/${offeringId}/interventions`, {
-        title: title.trim(),
-        description: 'Targeted support prepared from teacher-reviewed concept assessment evidence.',
-        concept_ids: [activeConceptId],
-        student_membership_ids: selectedStudents,
-        phase_a_assessment_id: phaseAId,
-        phase_b_practice_assessment_id: phaseBId,
-        phase_b_primer_content: primer.trim() || null,
-        phase_b_completion_rule: 'all_required_items',
-        phase_c_assessment_id: phaseCId,
-      });
-      await apiClient.post(`/api/v1/courses/${offeringId}/interventions/${intervention.id}/publish`, {});
-      const updated = await apiClient.get<Intervention[]>(`/api/v1/courses/${offeringId}/interventions`);
-      setInterventions(Array.isArray(updated) ? updated : []);
-      setTitle('');
-      setPrimer('');
-      setSelectedStudents([]);
-      setMessage('Intervention approved and assigned. Phase A is a formal assessment; Phase C unlocks after all required Phase B items.');
-    } catch {
-      setMessage('Intervention could not be published. Confirm all assessment phases are configured and Phase A and Phase C use disjoint question sets.');
-    } finally {
-      setSavingIntervention(false);
-    }
-  };
-
-  const draftPrimerWithAI = async () => {
-    if (!offeringId || !activeConceptId) return;
-    try {
-      setDraftingPrimer(true);
-      setMessage('');
-      const res = await apiClient.post<{
-        primer_draft: string;
-        concept_name: string;
-        key_doubt_themes: string[];
-      }>(`/api/v1/courses/${offeringId}/interventions/draft-primer`, {
-        concept_id: activeConceptId,
-      });
-      setPrimer(res.primer_draft);
-      if (!title.trim() && res.concept_name) {
-        setTitle(`Targeted Intervention: ${res.concept_name}`);
-      }
-      setMessage('✨ AI drafted remediation explanation synthesized from student doubts and assessment gaps.');
-    } catch {
-      setMessage('Failed to generate AI explanation draft.');
-    } finally {
-      setDraftingPrimer(false);
-    }
-  };
 
   const loadReport = async (id: string) => {
     try {
@@ -387,7 +331,7 @@ export const TeacherAnalyticsPage: React.FC<{
               {rows.find((row) => row.concept_id === activeConceptId)?.concept_name || 'Selected concept'}
             </h3>
             <p className="mt-1 text-xs text-slate-500">
-              Select affected students. The sample size and underlying scored question evidence are shown below.
+              Select students with confirmed weakness evidence. Students with insufficient evidence need more diagnostic assessment first.
             </p>
           </div>
 
@@ -399,6 +343,7 @@ export const TeacherAnalyticsPage: React.FC<{
               >
                 <input
                   type="checkbox"
+                  disabled={student.diagnostic_status !== 'confirmed_weakness'}
                   checked={selectedStudents.includes(student.student_membership_id)}
                   onChange={() => toggleStudent(student.student_membership_id)}
                   className="mt-1 rounded accent-[#0A8FF5]"
@@ -421,167 +366,15 @@ export const TeacherAnalyticsPage: React.FC<{
             ))}
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 pt-2">
-            <label className="text-xs font-semibold text-slate-700">
-              Intervention title
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="mt-1.5 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-                placeholder="Targeted concept intervention"
-              />
-            </label>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-xs font-semibold text-slate-700">Phase A · Baseline pre-test</span>
-                {onCreateAssessment && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onCreateAssessment({
-                        offeringId,
-                        conceptId: activeConceptId || undefined,
-                        conceptName: activeConcept?.concept_name || undefined,
-                        assessmentType: 'intervention_baseline',
-                        defaultTitle: activeConcept?.concept_name
-                          ? `${activeConcept.concept_name} · Baseline Pre-Test`
-                          : 'Baseline Pre-Test',
-                      })
-                    }
-                    className="text-[11px] font-semibold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" /> Create Assessment
-                  </button>
-                )}
-              </div>
-              <select
-                value={phaseAId}
-                onChange={(e) => setPhaseAId(e.target.value)}
-                className="mt-1 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-              >
-                <option value="">Select diagnostic assessment</option>
-                {assessments
-                  .filter((a) => a.assessment_type === 'intervention_baseline')
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.title}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-xs font-semibold text-slate-700">Phase B · Targeted practice</span>
-                {onCreateAssessment && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onCreateAssessment({
-                        offeringId,
-                        conceptId: activeConceptId || undefined,
-                        conceptName: activeConcept?.concept_name || undefined,
-                        assessmentType: 'intervention_practice',
-                        defaultTitle: activeConcept?.concept_name
-                          ? `${activeConcept.concept_name} · Targeted Practice`
-                          : 'Targeted Practice',
-                      })
-                    }
-                    className="text-[11px] font-semibold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" /> Create Assessment
-                  </button>
-                )}
-              </div>
-              <select
-                value={phaseBId}
-                onChange={(e) => setPhaseBId(e.target.value)}
-                className="mt-1 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-              >
-                <option value="">Select practice assessment</option>
-                {assessments
-                  .filter((a) => a.assessment_type === 'intervention_practice')
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.title}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-xs font-semibold text-slate-700">Phase C · Post-test</span>
-                {onCreateAssessment && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onCreateAssessment({
-                        offeringId,
-                        conceptId: activeConceptId || undefined,
-                        conceptName: activeConcept?.concept_name || undefined,
-                        assessmentType: 'intervention_post',
-                        defaultTitle: activeConcept?.concept_name
-                          ? `${activeConcept.concept_name} · Post-Test Reassessment`
-                          : 'Post-Test Reassessment',
-                      })
-                    }
-                    className="text-[11px] font-semibold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" /> Create Assessment
-                  </button>
-                )}
-              </div>
-              <select
-                value={phaseCId}
-                onChange={(e) => setPhaseCId(e.target.value)}
-                className="mt-1 block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-              >
-                <option value="">Select comparable reassessment</option>
-                {assessments
-                  .filter((a) => a.assessment_type === 'intervention_post')
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.title}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            <div className="md:col-span-2">
-              <div className="flex items-center justify-between gap-2 mb-1.5">
-                <label className="text-xs font-semibold text-slate-700">
-                  Phase B · Teacher-approved explanation
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void draftPrimerWithAI()}
-                  disabled={draftingPrimer || !activeConceptId}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700 hover:bg-purple-100 transition disabled:opacity-50 cursor-pointer"
-                >
-                  {draftingPrimer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-purple-600" />}
-                  ✨ Draft with AI (Doubts & Gaps)
-                </button>
-              </div>
-              <textarea
-                value={primer}
-                onChange={(e) => setPrimer(e.target.value)}
-                rows={5}
-                className="block w-full rounded-xl border border-[#DCE7EE] bg-white px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-                placeholder="Write the explanation or link the approved material students should study."
-              />
-            </div>
-          </div>
-
-          <p className="text-xs text-slate-500">
-            Completion rule: all required practice items. Phase C is gated by completion, not by a passing score. The backend rejects overlapping Phase A and Phase C question sets.
-          </p>
-
-          <button
-            onClick={() => void createIntervention()}
-            disabled={savingIntervention || !selectedStudents.length || !phaseAId || !phaseBId || !phaseCId || !title.trim()}
-            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 hover:bg-slate-800 transition cursor-pointer"
-          >
-            {savingIntervention ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            Approve and assign ({selectedStudents.length})
-          </button>
+          <InterventionAuthoringPanel
+            key={`${offeringId}:${activeConceptId}`}
+            offeringId={offeringId}
+            conceptId={activeConceptId}
+            conceptName={rows.find((row) => row.concept_id === activeConceptId)?.concept_name || 'Selected concept'}
+            studentIds={selectedStudents}
+            assessments={assessments}
+            onAssigned={async () => { await loadAnalytics(); setSelectedStudents([]); }}
+          />
         </section>
       )}
 

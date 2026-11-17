@@ -64,6 +64,7 @@ class Intervention(Base):
         String(50), default="all_required_items", nullable=False
     )  # all_required_items | designated_core_items | minimum_count
     phase_b_required_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    require_primer_acknowledgment: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Phase C Post Assessment (Must be strictly disjoint from Phase A)
     phase_c_assessment_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -161,6 +162,7 @@ class InterventionAssignment(Base):
     phase_a_score: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
 
     # Phase B tracking
+    phase_b_primer_acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     phase_b_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     phase_b_items_completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

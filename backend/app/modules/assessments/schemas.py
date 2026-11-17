@@ -180,6 +180,8 @@ class QuizQuestionIn(BaseModel):
     source_chunk_ids: List[UUID] = []
     concept_ids: List[UUID] = []
     origin_type: str = Field("teacher_authored", pattern="^(teacher_authored|ai_supplementary)$")
+    difficulty_level: str = Field("medium", pattern="^(easy|medium|hard)$")
+    cognitive_level: str = Field("understand", pattern="^(remember|understand|apply|analyze|evaluate|create)$")
 
 
 class QuizCreateRequest(BaseModel):

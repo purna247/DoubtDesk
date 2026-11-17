@@ -150,6 +150,7 @@ class AnalyticsService:
         db: AsyncSession,
         tenant_id: uuid.UUID,
         course_offering_id: uuid.UUID,
+        commit: bool = True,
     ) -> CourseAnalyticsPolicy:
         """Resolve policy using precedence: Course Offering Override -> Institution Default -> System Defaults."""
         # 1. Course offering override
@@ -184,8 +185,11 @@ class AnalyticsService:
             is_active=True,
         )
         db.add(policy)
-        await db.commit()
-        await db.refresh(policy)
+        if commit:
+            await db.commit()
+            await db.refresh(policy)
+        else:
+            await db.flush()
         return policy
 
     @staticmethod
@@ -293,13 +297,14 @@ class AnalyticsService:
         course_offering_id: uuid.UUID,
         user_id: Optional[uuid.UUID] = None,
         run_type: str = "manual",
+        commit: bool = True,
     ) -> AnalyticsRun:
         """
         Compute rebuildable concept accuracy and cohort analytics snapshots.
         Strictly applies the First Valid Submitted and Scored attempt policy.
         """
         now = datetime.now(timezone.utc)
-        policy = await AnalyticsService.get_or_resolve_policy(db, tenant_id, course_offering_id)
+        policy = await AnalyticsService.get_or_resolve_policy(db, tenant_id, course_offering_id, commit=commit)
 
         # 1. Fetch all active enrolled students for this course offering
         enrolment_stmt = (
@@ -600,8 +605,11 @@ class AnalyticsService:
             cohort_analytics_list.append(cohort_item)
             db.add(cohort_item)
 
-        await db.commit()
-        await db.refresh(run)
+        if commit:
+            await db.commit()
+            await db.refresh(run)
+        else:
+            await db.flush()
         return run
 
     @staticmethod

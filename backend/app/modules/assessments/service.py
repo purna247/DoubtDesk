@@ -1108,6 +1108,7 @@ class AssessmentService:
         tenant_id: uuid.UUID,
         user_id: uuid.UUID,
         data: QuizCreateRequest,
+        commit: bool = True,
     ) -> Assessment:
         """Atomically author an MCQ quiz assessment backed by LearningNode/ActivityVersion."""
         offering = await db.get(CourseOffering, offering_id)
@@ -1263,6 +1264,8 @@ class AssessmentService:
                     "max_marks": float(q_in.marks),
                     "negative_marks": 0.0,
                     "origin_type": q_in.origin_type,
+                    "difficulty_level": q_in.difficulty_level,
+                    "cognitive_level": q_in.cognitive_level,
                     "source_chunk_ids": [str(source_id) for source_id in q_in.source_chunk_ids],
                 },
                 approval_status="approved",
@@ -1297,7 +1300,10 @@ class AssessmentService:
                     )
             _allocate_item_concepts(db, tenant_id, item.id, float(q_in.marks), resolved_concept_ids)
 
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return await AssessmentService.load_assessment_full(db, assessment.id, tenant_id)
 
     @staticmethod

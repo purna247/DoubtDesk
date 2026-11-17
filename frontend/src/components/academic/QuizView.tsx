@@ -89,6 +89,8 @@ interface StudentIntervention {
   phase_a_score?: number | null;
   phase_b_unlocked: boolean;
   phase_b_completed: boolean;
+  phase_b_primer_acknowledged: boolean;
+  require_primer_acknowledgment: boolean;
   phase_b_primer_content?: string | null;
   phase_b_practice_assessment_id?: string | null;
   phase_b_items_completed: number;
@@ -158,6 +160,8 @@ export const QuizView: React.FC<QuizViewProps> = ({
 
   const [quizzes, setQuizzes] = useState<QuizWithCourse[]>([]);
   const [interventions, setInterventions] = useState<StudentIntervention[]>([]);
+  const [acknowledgingGuide, setAcknowledgingGuide] = useState<string | null>(null);
+  const [guideError, setGuideError] = useState('');
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft'>('all');
 
@@ -1992,8 +1996,9 @@ export const QuizView: React.FC<QuizViewProps> = ({
         <section className="rounded-[16px] border border-blue-200 bg-white p-5 space-y-4">
           <div>
             <h3 className="text-sm font-bold text-[#111111]">Targeted Learning Support</h3>
+            {guideError && <p role="alert" className="text-sm text-red-700">{guideError}</p>}
             <p className="text-xs text-[#4D5963] mt-0.5">
-              Assigned interventions unlock in order: baseline, targeted practice, then reassessment.
+              Complete your baseline, review the study guide and any assigned practice, then check your progress.
             </p>
           </div>
           <div className="space-y-3">
@@ -2030,15 +2035,31 @@ export const QuizView: React.FC<QuizViewProps> = ({
                     )}
                   </div>
                   <div className="rounded-lg bg-[#F8FAFC] p-3 text-xs">
-                    <p className="font-bold text-[#111111]">B · Targeted practice</p>
+                    <p className="font-bold text-[#111111]">B · Study and practise</p>
                     <p className="mt-1 text-[#4D5963]">
-                      {x.phase_b_completed ? 'Practice complete' : x.phase_b_rule_description}
+                      {x.phase_b_completed ? 'Study and practice complete' : x.phase_b_rule_description}
                     </p>
                     {x.phase_b_unlocked && (
                       <>
                         {x.phase_b_primer_content && (
                           <p className="mt-1.5 whitespace-pre-wrap text-[#4D5963]">{x.phase_b_primer_content}</p>
                         )}
+                        {x.require_primer_acknowledgment && !x.phase_b_primer_acknowledged && (
+                          <button type="button" disabled={acknowledgingGuide === x.intervention_id}
+                            className="mt-3 block rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white disabled:opacity-50"
+                            onClick={async () => {
+                              if (!x.offering) return;
+                              setAcknowledgingGuide(x.intervention_id); setGuideError('');
+                              try {
+                                await apiClient.post(`/api/v1/courses/${x.offering.id}/interventions/${x.intervention_id}/acknowledge-study-guide`, {});
+                                await loadQuizzes();
+                              } catch { setGuideError('Could not record your acknowledgment. Please retry.'); }
+                              finally { setAcknowledgingGuide(null); }
+                            }}>
+                            {acknowledgingGuide === x.intervention_id ? 'Saving…' : 'I’ve reviewed the study guide'}
+                          </button>
+                        )}
+                        {x.phase_b_primer_acknowledged && <p className="mt-2 text-emerald-700">Study guide reviewed</p>}
                         {x.phase_b_practice_assessment_id && (
                           <button
                             type="button"
@@ -2064,8 +2085,8 @@ export const QuizView: React.FC<QuizViewProps> = ({
                       {x.phase_c_completed
                         ? `Completed · score ${x.phase_c_score ?? 'pending'}`
                         : x.phase_c_unlocked
-                          ? 'Available after required practice'
-                          : 'Locked until practice completion'}
+                          ? 'Ready to check your progress'
+                          : 'Complete the study guide and any assigned practice first'}
                     </p>
                     {x.phase_c_unlocked && !x.phase_c_completed && x.phase_c_assessment_id && (
                       <button

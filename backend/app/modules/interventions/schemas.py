@@ -21,7 +21,8 @@ class InterventionCreate(BaseModel):
     student_membership_ids: List[uuid.UUID] = Field(..., min_length=1)
     phase_a_assessment_id: uuid.UUID
     phase_b_primer_content: Optional[str] = None
-    phase_b_practice_assessment_id: uuid.UUID
+    phase_b_practice_assessment_id: Optional[uuid.UUID] = None
+    require_primer_acknowledgment: bool = False
     phase_b_completion_rule: str = Field(
         "all_required_items",
         pattern="^(all_required_items|designated_core_items|minimum_count)$",
@@ -46,6 +47,7 @@ class InterventionOut(BaseModel):
     phase_b_practice_assessment_id: Optional[uuid.UUID] = None
     phase_b_completion_rule: str
     phase_b_required_count: Optional[int] = None
+    require_primer_acknowledgment: bool = False
     phase_c_assessment_id: Optional[uuid.UUID] = None
     approved_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
@@ -88,6 +90,8 @@ class StudentInterventionViewOut(BaseModel):
     # Phase B status
     phase_b_unlocked: bool
     phase_b_completed: bool
+    phase_b_primer_acknowledged: bool = False
+    require_primer_acknowledgment: bool = False
     phase_b_primer_content: Optional[str] = None
     phase_b_practice_assessment_id: Optional[uuid.UUID] = None
     phase_b_items_completed: int

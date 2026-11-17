@@ -154,6 +154,11 @@ class InterventionService:
             elif item.activity_version:
                 kind = item.activity_version.activity_type
                 item_types[kind] = item_types.get(kind, 0) + 1
+                config = item.activity_version.scoring_config_json or {}
+                difficulty = config.get("difficulty_level", "medium")
+                level = config.get("cognitive_level", "understand")
+                difficulty_counts[difficulty] = difficulty_counts.get(difficulty, 0) + 1
+                cognitive_counts[level] = cognitive_counts.get(level, 0) + 1
         return {
             "concept_marks": concept_marks,
             "difficulty_counts": difficulty_counts,
@@ -169,6 +174,7 @@ class InterventionService:
         course_offering_id: uuid.UUID,
         req: InterventionCreate,
         user_id: uuid.UUID,
+        commit: bool = True,
     ) -> Intervention:
         """
         Create a targeted intervention from concept analytics evidence.
@@ -208,14 +214,20 @@ class InterventionService:
         phase_a_profile = await InterventionService._get_assessment_profile(
             db, req.phase_a_assessment_id, tenant_id, course_offering_id, "intervention_baseline"
         )
-        phase_b_profile = await InterventionService._get_assessment_profile(
-            db, req.phase_b_practice_assessment_id, tenant_id, course_offering_id, "intervention_practice"
-        )
+        if (req.require_primer_acknowledgment or not req.phase_b_practice_assessment_id) and not (req.phase_b_primer_content or "").strip():
+            raise AppException(status_code=400, code="STUDY_GUIDE_REQUIRED", message="Add a study guide before assigning this intervention.")
+        phase_b_profile = None
+        if req.phase_b_practice_assessment_id:
+            phase_b_profile = await InterventionService._get_assessment_profile(
+                db, req.phase_b_practice_assessment_id, tenant_id, course_offering_id, "intervention_practice"
+            )
         phase_c_profile = await InterventionService._get_assessment_profile(
             db, req.phase_c_assessment_id, tenant_id, course_offering_id, "intervention_post"
         )
         expected_concepts = set(req.concept_ids)
         for phase_name, profile in (("Phase A", phase_a_profile), ("Phase B", phase_b_profile), ("Phase C", phase_c_profile)):
+            if profile is None:
+                continue
             if set(profile["concept_marks"]) != expected_concepts:
                 raise AppException(
                     status_code=400,
@@ -244,7 +256,7 @@ class InterventionService:
             raise AppException(status_code=400, code="INVALID_INTERVENTION_STUDENTS", message="Every selected student must be actively enrolled in this course offering.")
 
         latest_run = await AnalyticsService.compute_and_persist_analytics_run(
-            db, tenant_id, course_offering_id, user_id=user_id
+            db, tenant_id, course_offering_id, user_id=user_id, commit=commit
         )
         evidence_stmt = select(StudentConceptEvidenceSnapshot.student_membership_id).where(
             StudentConceptEvidenceSnapshot.analytics_run_id == latest_run.id,
@@ -276,6 +288,7 @@ class InterventionService:
             phase_a_assessment_id=req.phase_a_assessment_id,
             phase_b_primer_content=req.phase_b_primer_content,
             phase_b_practice_assessment_id=req.phase_b_practice_assessment_id,
+            require_primer_acknowledgment=req.require_primer_acknowledgment or not req.phase_b_practice_assessment_id,
             phase_b_completion_rule=req.phase_b_completion_rule,
             phase_b_required_count=req.phase_b_required_count,
             phase_c_assessment_id=req.phase_c_assessment_id,
@@ -308,8 +321,11 @@ class InterventionService:
                 )
             )
 
-        await db.commit()
-        await db.refresh(intervention)
+        if commit:
+            await db.commit()
+            await db.refresh(intervention)
+        else:
+            await db.flush()
         return intervention
 
     @staticmethod
@@ -403,7 +419,8 @@ class InterventionService:
                     assignment.assignment_status = "phase_a_completed"
 
         # 2. Check Phase B Practice (Only if Phase A is completed!)
-        if assignment.phase_a_completed_at and intervention.phase_b_practice_assessment_id:
+        guide_done = not intervention.require_primer_acknowledgment or assignment.phase_b_primer_acknowledged_at is not None
+        if assignment.phase_a_completed_at and guide_done and intervention.phase_b_practice_assessment_id:
             b_stmt = (
                 select(AssessmentAttempt)
                 .join(AssessmentVersion, AssessmentAttempt.assessment_version_id == AssessmentVersion.id)
@@ -454,6 +471,11 @@ class InterventionService:
                     if assignment.assignment_status in ("phase_a_completed", "phase_b_in_progress"):
                         assignment.assignment_status = "phase_b_completed"
 
+        if assignment.phase_a_completed_at and guide_done and not intervention.phase_b_practice_assessment_id:
+            assignment.phase_b_completed_at = assignment.phase_b_primer_acknowledged_at
+            if assignment.assignment_status in ("assigned", "phase_a_completed", "phase_b_in_progress"):
+                assignment.assignment_status = "phase_b_completed"
+
         # 3. Check Phase C Post Assessment (Only if Phase B is completed!)
         if assignment.phase_b_completed_at and intervention.phase_c_assessment_id:
             c_stmt = (
@@ -503,6 +525,14 @@ class InterventionService:
         Phase B is inaccessible until Phase A is submitted.
         Phase C is inaccessible until Phase B completion rule is satisfied.
         """
+        intervention = (await db.execute(select(Intervention).where(
+            Intervention.id == intervention_id,
+            Intervention.institution_id == tenant_id,
+            Intervention.course_offering_id == course_offering_id,
+            Intervention.status.in_(["active", "published"]),
+        ))).scalars().first()
+        if not intervention:
+            raise AppException(status_code=404, code="INTERVENTION_NOT_FOUND", message="Active intervention not found.")
         # Sync latest progress
         assignment = await InterventionService.sync_student_progress(
             db, tenant_id, intervention_id, student_membership_id
@@ -534,6 +564,10 @@ class InterventionService:
             "designated_core_items": "Submit all designated core practice items.",
             "minimum_count": f"Submit at least {intervention.phase_b_required_count or 1} distinct practice items.",
         }.get(intervention.phase_b_completion_rule, "Submit required practice items.")
+        if not intervention.phase_b_practice_assessment_id:
+            rule_desc = "Review the study guide and acknowledge it to unlock reassessment."
+        elif intervention.require_primer_acknowledgment:
+            rule_desc = "Review and acknowledge the study guide. " + rule_desc
 
         return StudentInterventionViewOut(
             intervention_id=intervention.id,
@@ -546,6 +580,8 @@ class InterventionService:
             phase_a_score=assignment.phase_a_score,
             phase_b_unlocked=phase_b_unlocked,
             phase_b_completed=phase_b_done,
+            phase_b_primer_acknowledged=assignment.phase_b_primer_acknowledged_at is not None,
+            require_primer_acknowledgment=intervention.require_primer_acknowledgment,
             phase_b_primer_content=intervention.phase_b_primer_content if phase_b_unlocked else None,
             phase_b_practice_assessment_id=intervention.phase_b_practice_assessment_id if phase_b_unlocked else None,
             phase_b_items_completed=assignment.phase_b_items_completed_count,
@@ -693,6 +729,7 @@ class InterventionService:
                 phase_b_practice_assessment_id=item.phase_b_practice_assessment_id,
                 phase_b_completion_rule=item.phase_b_completion_rule,
                 phase_b_required_count=item.phase_b_required_count,
+                require_primer_acknowledgment=item.require_primer_acknowledgment,
                 phase_c_assessment_id=item.phase_c_assessment_id,
                 approved_at=item.approved_at,
                 published_at=item.published_at,
@@ -800,91 +837,20 @@ class InterventionService:
                 "",
             ])
 
-        # 3. Core Academic Principles & Taxonomy
-        is_bci_types = any(w in name.lower() for w in ["types", "invasive", "category", "categories", "classification"])
-        if is_bci_types:
-            primer_lines.extend([
-                "## 3. Core Academic Principles & Taxonomy",
-                "Brain-Computer Interfaces are classified along distinct, independent engineering dimensions:",
-                "",
-                "### A. Classification by Sensor Placement (Biological Invasiveness)",
-                "1. **Non-Invasive BCI**:",
-                "   - *Placement*: Scalp surface electrodes (e.g. standard 10–20 EEG).",
-                "   - *Signal Quality*: Lower spatial resolution; signals are attenuated and filtered by skull and scalp tissue.",
-                "   - *Safety & Risk*: Completely safe, non-surgical, easily wearable.",
-                "   - *Typical Applications*: P300 virtual keyboard, motor imagery cursor control.",
-                "",
-                "2. **Partially Invasive BCI**:",
-                "   - *Placement*: Electrodes surgically placed on the exposed cortical surface beneath the skull (Electrocorticography / ECoG).",
-                "   - *Signal Quality*: High spatial and temporal resolution without skull tissue distortion.",
-                "   - *Safety & Risk*: Requires craniotomy, but electrodes remain outside the brain parenchyma (lower scarring than microelectrodes).",
-                "   - *Typical Applications*: High-accuracy speech synthesis and prosthetic motor control.",
-                "",
-                "3. **Invasive BCI**:",
-                "   - *Placement*: Microelectrode arrays (e.g. Utah Array) implanted directly inside grey matter cortical tissue.",
-                "   - *Signal Quality*: Highest spatial precision, recording single-unit action potentials (spikes) and local field potentials.",
-                "   - *Safety & Risk*: Highest surgical risk, potential glial scarring and foreign-body tissue encapsulation over time.",
-                "   - *Typical Applications*: Multi-degree-of-freedom robotic arm manipulation and intracortical neuroprosthetics.",
-                "",
-                "### B. Classification by Operational Timing (Independent Modality)",
-                "- **Synchronous (Cue-Paced)**: The system dictates when the user can transmit commands based on predefined trial stimulus windows.",
-                "- **Asynchronous (Self-Paced)**: The user initiates commands at will; the BCI continuously analyzes incoming brain signals without external cues.",
-                "",
-                "> **Pedagogical Note**: Never confuse physical invasiveness (where sensors are placed) with operational timing (system-paced vs self-paced). They are orthogonal design choices.",
-                "",
-            ])
-        else:
-            primer_lines.extend([
-                "## 3. Core Academic Principles",
-                f"Understanding `{name}` requires mastering its fundamental mechanisms and governing definitions.",
-                "- Distinguish between theoretical principles and their physical/computational implementations.",
-                "- Verify parameter dependencies and structural boundaries before proceeding to complex configurations.",
-                "",
-            ])
-
-        # 4. Practical Modalities & Illustrative Examples
         primer_lines.extend([
-            "## 4. Practical Modalities & Illustrative Examples",
-            f"When examining `{name}` in academic problems and experimental laboratory set-ups:",
-            "- Compare the trade-offs between measurement resolution and biological invasiveness.",
-            "- Account for ambient noise, user physiological variability, and device latency.",
-            "",
+            '## 3. Questions to Address',
+            *[f'- {title}' for title in doubt_titles[:5]],
+            '',
+            '## 4. Suggested Revision',
+            'Review the concept definition and the approved course references below.',
+            'Explain the concept in your own words and work through an example before reassessment.',
+            '',
         ])
-
-        # 5. Suggested Revision Activities & Study Plan
-        primer_lines.extend([
-            "## 5. Suggested Revision Activities & Study Plan",
-            "1. Review the primary lecture slides cited below to trace block diagrams and comparison tables.",
-            "2. Construct a comparative summary matrix contrasting key parameters (e.g. spatial resolution, temporal resolution, invasiveness).",
-            "3. Formulate concise explanations for each category without confusing independent operational dimensions.",
-            "4. Complete the diagnostic self-check questions below to verify active recall.",
-            "",
-        ])
-
-        # 6. Diagnostic Self-Check Questions
-        if is_bci_types:
-            primer_lines.extend([
-                "## 6. Diagnostic Self-Check Questions",
-                "1. *Which BCI recording technique places electrodes directly on the cortical surface without penetrating brain tissue?* (Answer: Partially invasive / ECoG).",
-                "2. *Why does non-invasive scalp EEG exhibit lower spatial resolution than intracortical arrays?* (Answer: Skull and scalp tissue act as low-pass spatial filters attenuating high-frequency electrical signals).",
-                "3. *True or False: An asynchronous BCI requires an external visual cue to prompt user intention.* (Answer: False; asynchronous BCIs are self-paced).",
-                "",
-            ])
-        else:
-            primer_lines.extend([
-                "## 6. Diagnostic Self-Check Questions",
-                f"1. *What is the primary governing principle of {name}?*",
-                f"2. *How do variations in system inputs affect the stability and performance of {name}?*",
-                "",
-            ])
-
-        # 7. Grounded Lecture Slide References
         if rag_chunks:
-            primer_lines.append("## 7. Grounded Lecture Slide References")
+            primer_lines.append('## 5. Course References')
             for chunk, _, citation in rag_chunks:
-                snippet = chunk.content_text[:240].replace('\n', ' ').strip()
-                primer_lines.append(f"- 📖 **[{citation}]**: {snippet}...")
-            primer_lines.append("")
+                primer_lines.append(f'- [{citation}]: {chunk.content_text[:600].strip()}')
+        primer_lines.extend(['', 'Teacher: review this evidence outline and add a concept-specific explanation before assigning.'])
 
         primer_text = "\n".join(primer_lines)
 
