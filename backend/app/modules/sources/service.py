@@ -250,14 +250,14 @@ class SourceService:
             return ExtractionResult("DoubtDesk-Resume","1.0","succeeded",[],[],[],doc.sha256_checksum)
 
         # Update stage
-        await JobService.update_progress(db, job_id, "reading_file", 15.0, "Retrieving document bytes from storage.")
+        await JobService.update_progress(db, job_id, "reading_file", 15.0, f"Reading {doc.original_filename} from storage.")
         doc.status = "processing"
         await db.commit()
 
         # Read file bytes
         file_bytes = await StorageService.retrieve_file(doc.storage_key)
 
-        await JobService.update_progress(db, job_id, "extracting_content", 35.0, "Parsing structure, text, and tables.")
+        await JobService.update_progress(db, job_id, "parsing_content", 35.0, f"Parsing {doc.file_extension.upper()} structure, text, and diagram architectures.")
         result = await asyncio.to_thread(
             DocumentExtractionEngine.extract,
             file_bytes=file_bytes,
@@ -266,7 +266,10 @@ class SourceService:
         )
 
         # Persist extraction record
-        await JobService.update_progress(db, job_id, "persisting_provenance", 70.0, "Storing chunks and provenance metadata.")
+        await JobService.update_progress(
+            db, job_id, "persisting_provenance", 65.0,
+            f"Extracted {len(result.chunks)} text blocks and {len(result.assets)} visual assets. Saving provenance."
+        )
         extraction = SourceExtraction(
             id=uuid.uuid4(),
             institution_id=doc.institution_id,
@@ -305,6 +308,10 @@ class SourceService:
 
         # Compute semantic embeddings for document chunks if Gemini API key is configured
         if persisted_chunks:
+            await JobService.update_progress(
+                db, job_id, "generating_embeddings", 78.0,
+                f"Generating Gemini semantic vector embeddings for {len(persisted_chunks)} chunks."
+            )
             try:
                 texts_to_embed = [c.content_text for c in persisted_chunks]
                 embeddings = await compute_batch_embeddings(texts_to_embed)
@@ -316,7 +323,10 @@ class SourceService:
                 logger.debug("Failed computing chunk embeddings: %s", emb_exc)
 
         # Persist assets
-        await JobService.update_progress(db, job_id, "persisting_assets", 85.0, "Storing extracted visual assets.")
+        await JobService.update_progress(
+            db, job_id, "persisting_assets", 86.0,
+            f"Archiving {len(result.assets)} visual educational assets."
+        )
         for asset in result.assets:
             # Store asset bytes
             asset_key = f"{doc.institution_id}/assets/{asset.sha256_checksum}.bin"

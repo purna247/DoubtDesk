@@ -1,11 +1,14 @@
+import base64
+import concurrent.futures
 import hashlib
 import io
-import re
-import base64
 import logging
+import re
+import time
 from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
+import httpx
 import pymupdf
 import docx
 from docx.text.paragraph import Paragraph
@@ -602,6 +605,12 @@ class DocumentExtractionEngine:
 
         clean_filename = re.sub(r"\.(pptx|ppt)$", "", filename, flags=re.I)
         settings = get_settings()
+        total_slides = len(prs.slides)
+        t_parse_start = time.time()
+        logger.info("[PPTX Parser] Starting extraction of '%s' (%d slides total)...", filename, total_slides)
+
+        parsed_slides = []
+        visual_ocr_tasks = []
 
         for slide_idx, slide in enumerate(prs.slides):
             slide_num = slide_idx + 1
@@ -626,6 +635,8 @@ class DocumentExtractionEngine:
 
             # 2. Extract editable slide text and tables
             body_parts: List[str] = []
+            image_b64: Optional[str] = None
+
             for shape in slide.shapes:
                 if shape == slide.shapes.title:
                     continue
@@ -659,48 +670,22 @@ class DocumentExtractionEngine:
                                 metadata_json={"format": img.ext, "filename": getattr(img, "filename", None)},
                             )
                         )
+                        if image_b64 is None and len(img_bytes) > 25000:
+                            try:
+                                pil_img = Image.open(io.BytesIO(img_bytes))
+                                pil_img.thumbnail((800, 800))
+                                buf = io.BytesIO()
+                                pil_img.save(buf, format="JPEG", quality=85)
+                                image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 
-            # 3. Vision-based Image Extraction for Image-Heavy / Diagram Slides
-            # If slide has very little editable text (< 50 chars) or an image > 30KB
-            recovered_visual_text = ""
-            has_visual_extraction = False
+            # 3. Check if vision-based diagram extraction is needed
             total_editable_len = sum(len(p) for p in body_parts)
-
-            if total_editable_len < 60 and settings.GEMINI_API_KEY:
-                for shape in slide.shapes:
-                    if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE and hasattr(shape, "image"):
-                        try:
-                            blob = shape.image.blob
-                            if len(blob) > 25000:  # > 25 KB meaningful educational image
-                                img = Image.open(io.BytesIO(blob))
-                                img.thumbnail((800, 800))
-                                buf = io.BytesIO()
-                                img.save(buf, format="JPEG", quality=85)
-                                b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-
-                                import httpx
-                                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={settings.GEMINI_API_KEY}"
-                                payload = {
-                                    "contents": [{
-                                        "parts": [
-                                            {"text": "Extract all readable text, titles, headings, and diagram architecture descriptions from this academic lecture slide. Be thorough and concise."},
-                                            {"inline_data": {"mime_type": "image/jpeg", "data": b64}}
-                                        ]
-                                    }]
-                                }
-                                r = httpx.post(url, json=payload, timeout=12.0)
-                                if r.status_code == 200:
-                                    cand = r.json().get("candidates", [])
-                                    if cand:
-                                        p_text = cand[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-                                        if p_text:
-                                            recovered_visual_text = p_text
-                                            has_visual_extraction = True
-                                            break
-                        except Exception as v_exc:
-                            logger.debug("Visual slide extraction skipped on slide %d: %s", slide_num, v_exc)
+            if total_editable_len < 60 and settings.GEMINI_API_KEY and image_b64:
+                visual_ocr_tasks.append((slide_idx, slide_num, slide_title, image_b64))
 
             # 4. Extract Speaker Notes if present
             notes_text = ""
@@ -711,6 +696,74 @@ class DocumentExtractionEngine:
                         notes_text = notes_tf.text.strip()
                 except Exception:
                     pass
+
+            parsed_slides.append({
+                "slide_idx": slide_idx,
+                "slide_num": slide_num,
+                "slide_title": slide_title,
+                "section_path": section_path,
+                "body_parts": body_parts,
+                "notes_text": notes_text,
+            })
+
+        # Concurrent Gemini Vision OCR for diagram slides
+        visual_results: Dict[int, str] = {}
+        if visual_ocr_tasks:
+            workers_count = min(4, len(visual_ocr_tasks))
+            logger.info(
+                "[Vision OCR] Parallelizing %d diagram slide extractions across %d workers via Gemini 3.5 Flash Lite...",
+                len(visual_ocr_tasks),
+                workers_count,
+            )
+
+            def _ocr_worker(task_item):
+                s_idx, s_num, s_title, b64_str = task_item
+                t_ocr = time.time()
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={settings.GEMINI_API_KEY}"
+                    payload = {
+                        "contents": [{
+                            "parts": [
+                                {"text": "Extract all readable text, titles, headings, and diagram architecture descriptions from this academic lecture slide. Be thorough and concise."},
+                                {"inline_data": {"mime_type": "image/jpeg", "data": b64_str}}
+                            ]
+                        }]
+                    }
+                    with httpx.Client(timeout=16.0) as client:
+                        resp = client.post(url, json=payload)
+                        if resp.status_code == 200:
+                            cand = resp.json().get("candidates", [])
+                            if cand:
+                                p_text = cand[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                                logger.info(
+                                    "[Vision OCR] Slide %d/%d ('%s') diagram text extracted in %.1fs (%d chars)",
+                                    s_num, total_slides, s_title, time.time() - t_ocr, len(p_text)
+                                )
+                                return s_idx, p_text
+                except Exception as exc:
+                    logger.warning("[Vision OCR] Slide %d diagram OCR failed: %s", s_num, exc)
+                return s_idx, ""
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers_count) as executor:
+                for s_idx, text_out in executor.map(_ocr_worker, visual_ocr_tasks):
+                    if text_out:
+                        visual_results[s_idx] = text_out
+
+        logger.info(
+            "[PPTX Parser] Slide structure & visual extraction completed in %.1fs (%d diagram slides processed).",
+            time.time() - t_parse_start,
+            len(visual_results),
+        )
+
+        for p_slide in parsed_slides:
+            slide_idx = p_slide["slide_idx"]
+            slide_num = p_slide["slide_num"]
+            slide_title = p_slide["slide_title"]
+            section_path = p_slide["section_path"]
+            body_parts = p_slide["body_parts"]
+            notes_text = p_slide["notes_text"]
+            recovered_visual_text = visual_results.get(slide_idx, "")
+            has_visual_extraction = bool(recovered_visual_text)
 
             # 5. Build coherent slide content
             slide_header = f"Slide {slide_num}: {slide_title}" if slide_title else f"Slide {slide_num}"

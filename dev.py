@@ -155,14 +155,13 @@ def run_frontend():
 
 
 def run_all():
-    """Runs both backend and frontend concurrently."""
-    import threading
-
+    """Runs backend API, background worker, and frontend dev server concurrently."""
     print("\n" + "=" * 60)
-    print("  🌟 Starting DoubtDesk Full Stack (Backend + Frontend)")
+    print("  🌟 Starting DoubtDesk Full Stack (Backend + Worker + Frontend)")
     print("  Frontend: http://localhost:3000")
     print("  Backend:  http://localhost:8000")
-    print("  Press Ctrl+C at any time to stop both.")
+    print("  Worker:   Active (processing queued uploads & extractions)")
+    print("  Press Ctrl+C at any time to stop all services.")
     print("=" * 60 + "\n")
 
     py_bin = get_backend_python()
@@ -170,6 +169,7 @@ def run_all():
     run_migrations(py_bin)
 
     backend_proc = None
+    worker_proc = None
     frontend_proc = None
 
     try:
@@ -179,17 +179,23 @@ def run_all():
             "--host", "0.0.0.0", "--port", "8000", "--reload"
         ]
         backend_proc = subprocess.Popen(backend_cmd, cwd=str(BACKEND_DIR))
+
+        worker_cmd = [str(py_bin), "-m", "app.worker"]
+        worker_proc = subprocess.Popen(worker_cmd, cwd=str(BACKEND_DIR))
+
         frontend_proc = subprocess.Popen([npm_bin, "run", "dev"], cwd=str(FRONTEND_DIR))
 
         backend_proc.wait()
     except KeyboardInterrupt:
         print("\n[*] Shutting down servers...")
     finally:
-        if backend_proc and backend_proc.poll() is None:
-            backend_proc.terminate()
-        if frontend_proc and frontend_proc.poll() is None:
-            frontend_proc.terminate()
-        print("[✓] All servers stopped cleanly.")
+        for proc in (backend_proc, worker_proc, frontend_proc):
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+        print("[✓] All services stopped cleanly.")
 
 
 def main():

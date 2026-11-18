@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, UploadCloud } from 'lucide-react';
+import { AlertCircle, CheckCircle2, FileText, Loader2, UploadCloud } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { CourseOffering } from '../../types/academics';
 
@@ -230,18 +230,74 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
               {materials.filter((material) => materialTypeFilter === 'all' || material.source_type === materialTypeFilter).length ? <div className="space-y-2">{materials.filter((material) => materialTypeFilter === 'all' || material.source_type === materialTypeFilter).map((material) => <button key={material.id} onClick={() => { setDocument(material); setJobId(material.job_id || ''); setJob(material.job_status ? { status: material.job_status, current_stage: material.job_stage || material.job_status, progress_percent: material.job_progress_percent || 0, safe_error_summary: material.job_error_summary } : null); void refreshExtractions(material.id); }} className={`w-full rounded-xl border p-3 text-left ${document?.id === material.id ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}><div className="flex flex-wrap items-start justify-between gap-2"><span className="break-all text-sm font-semibold text-slate-900">{material.original_filename}</span><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${material.status === 'processed' ? 'bg-emerald-50 text-emerald-700' : material.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800'}`}>{material.status === 'processed' ? 'Ready for students' : (material.job_status || material.status).replace('_', ' ')}</span></div><div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-slate-500"><span>{material.source_type.replace('_', ' ')}</span>{material.job_stage && <span>{material.job_stage.replace(/_/g, ' ')}</span>}{material.job_progress_percent !== null && material.job_progress_percent !== undefined && <span>{Math.round(material.job_progress_percent)}%</span>}</div>{material.job_error_summary && <p className="mt-1 text-xs text-rose-700">{material.job_error_summary}</p>}</button>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No materials are recorded for this course yet.</p>}
             </div>
             {message && <p className="text-sm text-slate-600" role="status">{message}</p>}
-            {job && <div className="space-y-1">
-              <div className="flex justify-between text-xs text-slate-500"><span>{job.current_stage.replace(/_/g, ' ')}</span><span>{Math.round(job.progress_percent)}%</span></div>
-              <div className="h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-[#0A8FF5]" style={{ width: `${Math.max(0, Math.min(100, job.progress_percent))}%` }} /></div>
-              <p className="pt-1 text-[11px] text-slate-500">Job {jobId.slice(0, 8)} · attempt {job.attempt_count ?? 0}</p>
+            {job && <div className="space-y-2">
+              <div className="flex justify-between text-xs font-semibold text-slate-700">
+                <span className="capitalize">{job.current_stage.replace(/_/g, ' ')}</span>
+                <span>{Math.round(job.progress_percent)}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div
+                  className="h-2 rounded-full bg-[#0A8FF5] transition-all duration-300"
+                  style={{ width: `${Math.max(0, Math.min(100, job.progress_percent))}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                <span>Job {jobId.slice(0, 8)} · attempt {job.attempt_count ?? 0}</span>
+                {isProcessing && (
+                  <span className="flex items-center gap-1.5 text-blue-600 font-medium">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    In progress
+                  </span>
+                )}
+              </div>
               {job.error_code && <p className="text-[11px] text-rose-700">Diagnostic code: {job.error_code}</p>}
-              {job.events?.length ? <details className="pt-1"><summary className="cursor-pointer text-[11px] font-semibold text-slate-600">Processing event log ({job.events.length})</summary><ol className="mt-2 max-h-40 space-y-1 overflow-y-auto">{job.events.map((event, index) => <li key={`${event.created_at}-${index}`} className="text-[11px] leading-relaxed text-slate-500">{new Date(event.created_at).toLocaleTimeString()} · {event.stage_name?.replace(/_/g, ' ') || 'update'}{event.progress_percent != null ? ` · ${Math.round(event.progress_percent)}%` : ''} · {event.message_safe}</li>)}</ol></details> : null}
-              {job.status === 'queued' && queueWaitSeconds >= 15 && <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-900">
-                No worker has claimed this job yet. In local development run <code>python -m app.worker</code> from the backend, or start the Compose worker service.
-              </p>}
-              {job.status === 'failed' && job.safe_error_summary && <p role="alert" className="mt-2 rounded-lg bg-rose-50 p-2.5 text-xs text-rose-800">{job.safe_error_summary}</p>}
+              {job.events?.length ? (
+                <details className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3" open>
+                  <summary className="cursor-pointer text-xs font-bold text-slate-800 flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      {isProcessing && <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />}
+                      Behind-the-scenes activity ({job.events.length} event{job.events.length === 1 ? '' : 's'})
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Live debug log</span>
+                  </summary>
+                  <ol className="mt-3 max-h-56 space-y-2 overflow-y-auto divide-y divide-slate-200/60 pr-1">
+                    {job.events.map((event, index) => (
+                      <li key={`${event.created_at}-${index}`} className="pt-2 text-xs leading-relaxed">
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 mb-0.5">
+                          <span className="font-semibold text-slate-800 capitalize">
+                            {event.stage_name?.replace(/_/g, ' ') || 'Stage update'}
+                          </span>
+                          <span>
+                            {new Date(event.created_at).toLocaleTimeString()}{' '}
+                            {event.progress_percent != null ? `· ${Math.round(event.progress_percent)}%` : ''}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 font-mono text-[11px] bg-white rounded-lg p-2 border border-slate-100 break-words">
+                          {event.message_safe}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ) : null}
+              {job.status === 'queued' && (
+                <div className="mt-2 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs leading-relaxed text-amber-900 space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-amber-800">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
+                    <span>Upload is queued (waiting for worker)</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800/90">
+                    Jobs are processed by the background ingestion worker. If you ran <code>python dev.py all</code>, the worker now runs automatically. Alternatively, run <code>python dev.py worker</code> in another terminal window.
+                  </p>
+                </div>
+              )}
+              {job.status === 'failed' && job.safe_error_summary && (
+                <p role="alert" className="mt-2 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-800">
+                  {job.safe_error_summary}
+                </p>
+              )}
             </div>}
-            {job && ['succeeded', 'completed'].includes(job.status) && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-900">Processing complete. This course material is now available to enrolled students.</p>}
+            {job && ['succeeded', 'completed'].includes(job.status) && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-900 flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" /> Processing complete. This course material is now available to enrolled students.</p>}
           </section>
 
           <section className="rounded-2xl border border-[#DCE7EE] bg-white p-5 space-y-3">
@@ -261,10 +317,25 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
             <p className="mt-1 text-slate-500">{job?.status || document.status}{selectedOffering ? ` · ${selectedOffering.subject_name || selectedOffering.official_subject_code}` : ''}</p>
             {document.status === 'processed' && <p className="mt-2 text-[11px] text-emerald-700">Available to enrolled students.</p>}
           </div> : <p className="mb-4 rounded-xl bg-slate-50 p-4 text-xs text-slate-500">Upload a document to see its extraction here.</p>}
-          {isProcessing && <p className={`mb-3 flex items-center gap-2 text-xs ${job?.status === 'queued' ? 'text-amber-700' : 'text-blue-600'}`}>
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {job?.status === 'queued' ? `Queued for ${queueWaitSeconds}s · waiting for a worker` : `Preprocessing · ${job?.current_stage.replace(/_/g, ' ')}`}
-          </p>}
+          {isProcessing && (
+            <div className={`mb-3 rounded-xl p-3 text-xs ${job?.status === 'queued' ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-blue-50 text-blue-800 border border-blue-200'}`}>
+              <div className="flex items-center gap-2">
+                <Loader2 className={`h-4 w-4 animate-spin shrink-0 ${job?.status === 'queued' ? 'text-amber-600' : 'text-blue-600'}`} />
+                <div>
+                  <p className="font-semibold">
+                    {job?.status === 'queued'
+                      ? `Queued (${queueWaitSeconds}s) · Waiting for background worker`
+                      : `Preprocessing · ${job?.current_stage.replace(/_/g, ' ')} (${Math.round(job?.progress_percent || 0)}%)`}
+                  </p>
+                  {job?.events?.length ? (
+                    <p className="text-[11px] opacity-85 mt-0.5">
+                      {job.events[job.events.length - 1].message_safe}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          )}
           {extractions.map((extraction) => <div key={extraction.id} className="mb-4">
             <div className="mb-2 flex items-center justify-between text-xs"><span className="font-semibold text-slate-700">{extraction.extractor_name} · {extraction.status}</span><span className="text-slate-400">{extraction.chunks?.length ?? 0} text blocks</span></div>
             {extraction.safe_error_summary && <p className="mb-2 rounded-lg bg-rose-50 p-2 text-xs text-rose-700">{extraction.safe_error_summary}</p>}
