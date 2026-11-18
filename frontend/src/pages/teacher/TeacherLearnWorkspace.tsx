@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BookOpen,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -22,29 +21,9 @@ import {
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { Button } from '../../components/ui/Button';
-import { useStartAcademicExtraction } from '../../hooks/useStartAcademicExtraction';
-import { useTeacherLearningWorkspace } from '../../hooks/useTeacherLearningWorkspace';
-import type { ReviewSummary } from '../../api/teacherLearningWorkspace';
+import { useTeacherLearn } from '../../contexts/TeacherLearnContext';
 import type { CourseOffering } from '../../types/academics';
 import type { LearningNode } from '../../types/learning';
-
-const EMPTY_SUMMARY: ReviewSummary = {
-  run_status: 'waiting_for_documents',
-  generation_status: 'waiting_for_documents',
-  sources_ready: false,
-  publish_ready: false,
-  approved_syllabus_count: 0,
-  has_warnings: false,
-  warnings_count: 0,
-  modules_count: 0,
-  topics_count: 0,
-  concepts_count: 0,
-  approved_concepts_count: 0,
-  questions_count: 0,
-  draft_nodes_count: 0,
-  approved_concepts: [],
-  flagged_items: [],
-};
 
 interface ActivityVersionData {
   id: string;
@@ -68,32 +47,30 @@ interface ActivityItem {
 type WorkspaceTab = 'questions' | 'author' | 'settings';
 
 export const TeacherLearnWorkspace: React.FC<{
-  offerings: CourseOffering[];
+  offerings?: CourseOffering[];
   selectedSubject?: string;
-}> = ({ offerings, selectedSubject }) => {
-  const [offeringId, setOfferingId] = useState(offerings[0]?.id ?? '');
-  const [selectedId, setSelectedId] = useState('');
+}> = () => {
+  const {
+    currentOffering,
+    nodes,
+    summary,
+    selectedId,
+    selectedNode,
+    selectNode,
+    loading,
+    publishCurrentNode,
+    publishAll,
+    startExtraction,
+    generateAllCoursePractice: contextGenerateAllCoursePractice,
+    canGenerateRoadmap,
+    allNodesPublished,
+    generationActive,
+    isGeneratingAll,
+    academicExtraction,
+    refetchWorkspace,
+  } = useTeacherLearn();
+
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('questions');
-
-  useEffect(() => {
-    if (selectedSubject && selectedSubject !== 'all') {
-      const match = offerings.find(
-        (o) => o.id === selectedSubject || o.curriculum_subject_entry_id === selectedSubject
-      );
-      if (match) {
-        setOfferingId(match.id);
-        return;
-      }
-    }
-    if (!offeringId && offerings[0]?.id) {
-      setOfferingId(offerings[0].id);
-    }
-  }, [selectedSubject, offerings, offeringId]);
-
-  const currentOffering = useMemo(
-    () => offerings.find((o) => o.id === offeringId) || offerings[0],
-    [offerings, offeringId]
-  );
 
   // Topic form state
   const [title, setTitle] = useState('');
@@ -111,7 +88,6 @@ export const TeacherLearnWorkspace: React.FC<{
   const [nodeActivities, setNodeActivities] = useState<ActivityItem[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [isGeneratingPractice, setIsGeneratingPractice] = useState(false);
-  const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [activityTypeFilter, setActivityTypeFilter] = useState<string>('all');
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
 
@@ -297,25 +273,6 @@ export const TeacherLearnWorkspace: React.FC<{
     }
   };
 
-  const academicExtraction = useStartAcademicExtraction();
-  const workspaceQuery = useTeacherLearningWorkspace(offeringId);
-  const nodes = workspaceQuery.data?.nodes ?? [];
-  const summary = workspaceQuery.data?.summary ?? EMPTY_SUMMARY;
-  const loading = workspaceQuery.isLoading;
-
-  useEffect(() => {
-    if (!offerings.some((offering) => offering.id === offeringId)) {
-      setOfferingId(offerings[0]?.id ?? '');
-    }
-  }, [offerings, offeringId]);
-
-  useEffect(() => {
-    const rows = workspaceQuery.data?.nodes ?? [];
-    setSelectedId((current) => (rows.some((node) => node.id === current) ? current : rows[0]?.id ?? ''));
-  }, [workspaceQuery.data?.nodes]);
-
-  const selectedNode = nodes.find((node) => node.id === selectedId);
-
   useEffect(() => {
     if (!selectedNode) return;
     if (editorNodeId.current !== selectedNode.id) {
@@ -378,75 +335,12 @@ export const TeacherLearnWorkspace: React.FC<{
       setEditorDirty(false);
       setEditorConflict(false);
       setMessage('Draft saved successfully.');
-      await workspaceQuery.refetch();
+      await refetchWorkspace();
     } catch (err: unknown) {
       setEditorConflict(true);
       setMessage(err instanceof Error ? err.message : 'Could not save topic edits.');
     } finally {
       setBusy(false);
-    }
-  };
-
-  const publishCurrentNode = async () => {
-    if (!selectedNode || busy) return;
-    setBusy(true);
-    try {
-      await apiClient.post(`/api/v1/learning-nodes/${selectedNode.id}/publish`, {});
-      await workspaceQuery.refetch();
-      setMessage(`"${selectedNode.title}" is now published and live for enrolled students!`);
-    } catch (err: unknown) {
-      setMessage(err instanceof Error ? err.message : 'Could not publish this topic.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const publishAll = async () => {
-    if (
-      busy ||
-      !offeringId ||
-      !summary.course_content_version_id ||
-      !summary.publish_ready ||
-      ['queued', 'running', 'retrying'].includes(summary.generation_status)
-    )
-      return;
-    setBusy(true);
-    try {
-      const res = await apiClient.post<{ published_nodes: number }>(
-        `/api/v1/courses/${offeringId}/academic-review/publish-all`,
-        {}
-      );
-      await workspaceQuery.refetch();
-      setMessage(
-        `All course topics (${res.published_nodes ?? summary.draft_nodes_count}) are now published and live for students!`
-      );
-    } catch (err: unknown) {
-      setMessage(
-        err instanceof Error
-          ? err.message
-          : 'Could not publish course content. Please verify all extraction runs completed.'
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const startExtraction = async () => {
-    if (!offeringId || !summary.sources_ready || academicExtraction.isPending) return;
-    setMessage('');
-    try {
-      const job = await academicExtraction.mutateAsync(offeringId);
-      setMessage(
-        job.already_queued
-          ? 'Roadmap generation is already queued for these materials.'
-          : 'Roadmap generation queued. Completed topics will appear as they are processed.'
-      );
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Academic extraction could not be queued. Check material processing status.'
-      );
     }
   };
 
@@ -471,22 +365,9 @@ export const TeacherLearnWorkspace: React.FC<{
 
   // Generate All Practice Questions Course-Wide
   const generateAllCoursePractice = async () => {
-    if (!offeringId || isGeneratingAll) return;
-    setIsGeneratingAll(true);
-    setMessage('');
-    try {
-      const res = await apiClient.post<{ nodes_count: number; total_questions: number }>(
-        `/api/v1/courses/${offeringId}/generate-all-practice-questions`,
-        {}
-      );
-      if (selectedNode) {
-        await fetchNodeActivities(selectedNode.id);
-      }
-      setMessage(`Generated ${res.total_questions} practice questions across ${res.nodes_count} roadmap topics!`);
-    } catch (err: unknown) {
-      setMessage(err instanceof Error ? err.message : 'Course-wide practice generation failed.');
-    } finally {
-      setIsGeneratingAll(false);
+    await contextGenerateAllCoursePractice();
+    if (selectedNode) {
+      await fetchNodeActivities(selectedNode.id);
     }
   };
 
@@ -609,15 +490,6 @@ export const TeacherLearnWorkspace: React.FC<{
     }
   };
 
-  const groupedNodes = useMemo(() => {
-    const groups = new Map<string, LearningNode[]>();
-    for (const node of nodes) {
-      const moduleTitle = node.module_title || 'Other course topics';
-      groups.set(moduleTitle, [...(groups.get(moduleTitle) ?? []), node]);
-    }
-    return [...groups.entries()];
-  }, [nodes]);
-
   const filteredActivities = useMemo(() => {
     if (activityTypeFilter === 'all') return nodeActivities;
     return nodeActivities.filter((act) => act.latest_version?.activity_type === activityTypeFilter);
@@ -632,22 +504,10 @@ export const TeacherLearnWorkspace: React.FC<{
     return counts;
   }, [nodeActivities]);
 
-  const generationActive = ['queued', 'running', 'retrying'].includes(summary.generation_status);
-  const canGenerateRoadmap = summary.sources_ready && ['ready', 'failed'].includes(summary.generation_status);
-  const allNodesPublished = nodes.length > 0 && nodes.every((n) => n.status === 'published');
-
-  const selectNode = (nodeId: string) => {
-    if (editorDirty && nodeId !== selectedId) {
-      setMessage('Save your changes on the current topic before switching.');
-      return;
-    }
-    setSelectedId(nodeId);
-  };
-
   const reloadLatestNode = () => {
     setEditorDirty(false);
     setEditorConflict(false);
-    void workspaceQuery.refetch();
+    void refetchWorkspace();
   };
 
   return (
@@ -734,71 +594,28 @@ export const TeacherLearnWorkspace: React.FC<{
         </div>
       )}
 
-      {/* Main 2-Column Split Workspace */}
-      <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)] items-start">
-        {/* Left Column: Clean Roadmap Topic Outline */}
-        <nav
-          aria-label="Roadmap Outline"
-          className="rounded-[16px] border border-[#DCE7EE] bg-white p-3.5 shadow-xs space-y-3 max-h-[calc(100vh-190px)] overflow-y-auto"
-        >
-          <div className="flex items-center justify-between px-2 pb-2 border-b border-[#DCE7EE]">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-[#71808C] flex items-center gap-1.5">
-              <BookOpen className="h-3.5 w-3.5 text-[#0A8FF5]" />
-              Roadmap Topics ({nodes.length})
-            </h2>
-          </div>
+      {/* Mobile Topic Selector (visible only on small screens < md where the left sidebar is hidden) */}
+      {nodes.length > 0 && (
+        <div className="md:hidden rounded-[16px] border border-[#DCE7EE] bg-white p-3.5 shadow-xs">
+          <label className="text-[11px] font-bold uppercase tracking-wider text-[#71808C] block mb-1.5">
+            Select Topic ({nodes.length})
+          </label>
+          <select
+            value={selectedId}
+            onChange={(e) => selectNode(e.target.value)}
+            className="w-full text-xs font-semibold rounded-lg border border-[#DCE7EE] bg-white px-2.5 py-2 text-[#111111]"
+          >
+            {nodes.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.sequence_no}. {n.title} {n.status !== 'published' ? '(Draft)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
-          {loading ? (
-            <div className="py-8 text-center text-slate-400 flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-              <span className="text-xs">Loading topics…</span>
-            </div>
-          ) : groupedNodes.length ? (
-            <div className="space-y-4">
-              {groupedNodes.map(([moduleTitle, moduleNodes]) => (
-                <div key={moduleTitle} className="space-y-1">
-                  <p className="px-1 text-2xs font-bold uppercase tracking-wide text-slate-400 truncate" title={moduleTitle}>
-                    {moduleTitle}
-                  </p>
-                  <div className="space-y-1">
-                    {moduleNodes.map((node) => {
-                      const isSelected = selectedId === node.id;
-                      const isPublished = node.status === 'published';
-                      return (
-                        <button
-                          key={node.id}
-                          onClick={() => selectNode(node.id)}
-                          className={`w-full rounded-xl px-3 py-2.5 text-left transition flex items-start gap-2.5 cursor-pointer ${
-                            isSelected
-                              ? 'bg-[#EAF5FF] text-[#0A8FF5] font-semibold border border-[#B8D9F5]'
-                              : 'text-[#111111] hover:bg-[#F4F7F9] border border-transparent'
-                          }`}
-                        >
-                          <span className="text-[11px] font-mono text-[#71808C] mt-0.5">{node.sequence_no}.</span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs leading-snug line-clamp-2">{node.title}</p>
-                            {!isPublished && (
-                              <div className="mt-1 flex items-center gap-1">
-                                <span className="inline-block rounded-full px-2 py-0.5 text-[9px] font-bold uppercase bg-amber-50 text-amber-800 border border-amber-200">
-                                  Draft
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="p-3 text-xs text-[#71808C] text-center">No roadmap nodes available.</p>
-          )}
-        </nav>
-
-        {/* Right Column: Selected Topic Workspace with Tabs */}
-        <main className="space-y-4">
+      {/* Selected Topic Workspace */}
+      <div className="space-y-4 w-full">
           {selectedNode ? (
             <>
               {/* Topic Header Card */}
@@ -1647,8 +1464,7 @@ export const TeacherLearnWorkspace: React.FC<{
               <p className="text-xs text-slate-400 mt-1">Select a topic from the roadmap on the left to review its practice questions.</p>
             </div>
           )}
-        </main>
+        </div>
       </div>
-    </div>
-  );
-};
+    );
+  };

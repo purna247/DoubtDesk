@@ -50,7 +50,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       'grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)_290px] xl:grid-cols-[230px_minmax(0,1fr)_320px] 2xl:grid-cols-[240px_minmax(0,820px)_340px]';
   } else if (hasLeft && !hasRight) {
     gridCols =
-      'grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]';
+      'grid-cols-1 md:grid-cols-[250px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[310px_minmax(0,1fr)]';
   } else if (!hasLeft && hasRight) {
     gridCols =
       'grid-cols-1 lg:grid-cols-[minmax(0,1fr)_290px] xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,820px)_340px]';

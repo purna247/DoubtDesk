@@ -13,6 +13,8 @@ import { TeacherMaterialsPage } from './TeacherMaterialsPage';
 import { TeacherAnalyticsPage, type CreateAssessmentIntent } from './TeacherAnalyticsPage';
 import { QuizView } from '../../components/academic/QuizView';
 import { PYQView } from '../../components/academic/PYQView';
+import { TeacherLearnProvider } from '../../contexts/TeacherLearnContext';
+import { TeacherRoadmapSidebar } from '../../components/sidebar/TeacherRoadmapSidebar';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAcademicOfferings } from '../../hooks/useAcademicOfferings';
 import { useDoubtsFeed } from '../../hooks/useDoubtsFeed';
@@ -184,7 +186,7 @@ export const TeacherWorkspacePage: React.FC = () => {
   const isLearnTab = activeNavTab === 'learn';
 
   return (
-    <>
+    <TeacherLearnProvider offerings={offerings} selectedSubject={selectedSubject}>
       <AppLayout
         searchQuery={searchQuery}
         onSearchChange={(q) => {
@@ -204,22 +206,26 @@ export const TeacherWorkspacePage: React.FC = () => {
         fullWidthMain={isLearnTab || activeNavTab === 'teacher_analytics' || viewMode === 'profile'}
         leftSidebar={
           viewMode !== 'profile' ? (
-            <DesktopSidebar
-              selectedSubject={selectedSubject}
-              onSelectSubject={(id) => {
-                setSelectedSubject(id);
-                setViewMode('feed');
-                setActiveDoubtId(null);
-              }}
-              filterMode={filterMode}
-              onSelectFilterMode={(mode) => {
-                setFilterMode(mode);
-                setViewMode('feed');
-                setActiveDoubtId(null);
-              }}
-              activeNavTab={activeNavTab}
-              enrolledSubjects={enrolledSubjects}
-            />
+            isLearnTab ? (
+              <TeacherRoadmapSidebar />
+            ) : (
+              <DesktopSidebar
+                selectedSubject={selectedSubject}
+                onSelectSubject={(id) => {
+                  setSelectedSubject(id);
+                  setViewMode('feed');
+                  setActiveDoubtId(null);
+                }}
+                filterMode={filterMode}
+                onSelectFilterMode={(mode) => {
+                  setFilterMode(mode);
+                  setViewMode('feed');
+                  setActiveDoubtId(null);
+                }}
+                activeNavTab={activeNavTab}
+                enrolledSubjects={enrolledSubjects}
+              />
+            )
           ) : undefined
         }
         rightSidebar={
@@ -355,6 +361,6 @@ export const TeacherWorkspacePage: React.FC = () => {
       </AppLayout>
 
       <ToastNotification message={toastMessage} onClose={() => setToastMessage(null)} />
-    </>
+    </TeacherLearnProvider>
   );
 };
