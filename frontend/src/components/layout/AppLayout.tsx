@@ -56,7 +56,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     if (isAnalytics) {
       gridCols =
         'grid-cols-1 md:grid-cols-[190px_minmax(0,1fr)] xl:grid-cols-[210px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)]';
-      gridGap = 'gap-y-4 gap-x-2 md:gap-x-3';
+      gridGap = 'gap-y-4 gap-x-5 lg:gap-x-6';
     } else {
       gridCols =
         'grid-cols-1 md:grid-cols-[250px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[310px_minmax(0,1fr)]';
