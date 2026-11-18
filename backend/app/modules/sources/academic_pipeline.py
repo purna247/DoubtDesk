@@ -483,7 +483,9 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
         unresolved_groupings=await db.scalar(select(func.count()).select_from(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="grouping",AcademicExtractionBatch.status=="flagged_for_review")) if run else 0
         persisted_nodes=await db.scalar(select(func.count()).select_from(LearningNode).where(LearningNode.course_offering_id==offering_id,LearningNode.node_code.like(f"AI-{run.id.hex[:8]}-%"))) if run else 0
         if run and run.status=="succeeded" and not unresolved_groupings and persisted_nodes and await _cached_run_complete(db,run,all_rows):
-            out["runs"].append({"run_id":str(run.id),"cached":True,"warnings_count":run.warnings_count,"has_warnings":run.has_warnings});out["warnings_count"]+=run.warnings_count;out["has_warnings"]|=run.has_warnings;out["usable_batches"]+=1;continue
+            cached_count=await db.scalar(select(func.count()).select_from(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.status=="validated")) or 0
+            out["validated_batches"]+=cached_count;out["usable_batches"]+=cached_count
+            out["runs"].append({"run_id":str(run.id),"status":"succeeded","cached":True,"warnings_count":run.warnings_count,"has_warnings":run.has_warnings});out["warnings_count"]+=run.warnings_count;out["has_warnings"]|=run.has_warnings;continue
         if not run:
             run=AcademicExtractionRun(institution_id=trigger_doc.institution_id,source_document_id=trigger_doc.id,course_offering_id=offering_id,content_checksum=aggregate,pipeline_key=pipeline_key,model_name=settings.GEMINI_MODEL,prompt_version=PROMPT_VERSION,status="running");db.add(run);await db.flush()
         elif run.status!="running":
@@ -503,11 +505,16 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
         chunks_by_id={str(c.id):c for _,c in all_rows}
         syllabus_rows=[(d,c) for d,c in all_rows if d.source_type=="syllabus"]
         question_rows=[(d,c) for d,c in all_rows if d.source_type=="question_paper"]
-        stale_failed=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage.in_(["analysis","analysis_syllabus","analysis_questions","repair"]),AcademicExtractionBatch.warning_code.in_(["ANALYSIS_FAILED","ANALYSIS_RESPONSE_INVALID","GEMINI_PROVIDER_UNAVAILABLE","GEMINI_PROVIDER_REQUEST_FAILED","ITEMS_NEED_REVIEW","CHECKPOINT_SOURCE_MISMATCH"])))).scalars().all()
+        stale_failed=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage.in_(["analysis","analysis_syllabus","analysis_questions"]),AcademicExtractionBatch.warning_code.in_(["ANALYSIS_FAILED","ANALYSIS_RESPONSE_INVALID","GEMINI_PROVIDER_UNAVAILABLE","GEMINI_PROVIDER_REQUEST_FAILED","CHECKPOINT_SOURCE_MISMATCH","AI_NOT_CONFIGURED"])))).scalars().all()
         for batch in stale_failed:
             if batch.status=="validated":continue
             await db.delete(batch)
         if stale_failed:await db.flush()
+        # Cached successful analysis will not reproduce unresolved-item warnings.
+        # Retain their original checkpoints and rebuild the warning count from them.
+        retained_reviews=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.status=="flagged_for_review"))).scalars().all()
+        run.warnings_count=sum(len((b.response_json or {}).get("items",[])) if b.stage=="confidence_review" else 1 for b in retained_reviews)
+        run.has_warnings=run.warnings_count>0
 
         validated_modules:list[dict[str,Any]]=[];validated_questions:list[dict[str,Any]]=[]
         legacy_analysis=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="analysis",AcademicExtractionBatch.batch_index==0))).scalars().first()
