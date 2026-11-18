@@ -21,8 +21,14 @@ def upgrade() -> None:
     conn = op.get_bind()
     dialect_name = conn.dialect.name
     if dialect_name == "postgresql":
-        op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
-        op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pgcrypto";'))
+        try:
+            op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
+        except Exception:
+            pass
+        try:
+            op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pgcrypto";'))
+        except Exception:
+            pass
         # Try to enable pgvector extension only if available in PostgreSQL installation
         try:
             result = conn.execute(sa.text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector';")).scalar()

@@ -429,7 +429,7 @@ async def seed_database() -> None:
                 canonical_subject_id=subj.id,
                 subject_category_id=cat.id,
                 official_subject_code="CS301",
-                display_name_override="Design and Analysis of Algorithms",
+                display_name_override="Brain Computer Interface (BCI)",
                 semester_number=5,
                 credits=4.0,
                 lecture_hours_per_week=3,
