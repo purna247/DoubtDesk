@@ -1,4 +1,5 @@
 import asyncio
+import argparse
 import logging
 import os
 import signal
@@ -62,16 +63,18 @@ def handle_shutdown_signal(signum: int, _frame: Any) -> None:
 async def process_next_job(
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     worker_id: str | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> bool:
     """Recover expired leases, claim one job, and run its registered handler."""
     worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
     async with session_factory() as db:
-        await JobService.recover_expired_leases(db)
+        await JobService.recover_expired_leases(db,job_id=job_id)
         job = await JobService.claim_next_job(
             db,
             worker_id=worker_id,
             lease_duration_seconds=settings.WORKER_JOB_LEASE_SECONDS,
+            job_id=job_id,
         )
         if job is None:
             return False
@@ -137,7 +140,7 @@ async def process_next_job(
         return True
 
 
-async def run_worker() -> None:
+async def run_worker(job_id: uuid.UUID | None = None) -> None:
     """Continuously poll and execute durable jobs until a shutdown signal arrives."""
     global _running
     worker_id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -152,29 +155,46 @@ async def run_worker() -> None:
     try:
         while _running:
             try:
-                processed = await process_next_job(worker_id=worker_id)
+                processed = await process_next_job(worker_id=worker_id,job_id=job_id)
+                if job_id is not None:
+                    if not processed:
+                        logger.warning("Requested job %s is not currently claimable; no other job was processed.",job_id)
+                    return
                 if not processed and _running:
                     await asyncio.sleep(settings.WORKER_POLL_INTERVAL_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.error("Worker poll failed with %s; retrying.", type(exc).__name__)
+                if job_id is not None:
+                    raise
                 if _running:
                     await asyncio.sleep(max(settings.WORKER_POLL_INTERVAL_SECONDS, 1.0))
     finally:
         health_task.cancel()
         with suppress(asyncio.CancelledError):
             await health_task
+        try:
+            from sqlalchemy import delete
+            from app.modules.jobs.models import WorkerHeartbeat
+            async with async_session_factory() as db:
+                await db.execute(delete(WorkerHeartbeat).where(WorkerHeartbeat.worker_id==worker_id))
+                await db.commit()
+        except Exception as exc:
+            logger.warning("Worker heartbeat cleanup failed with %s.",type(exc).__name__)
         logger.info("Cleaning up worker database connections.")
         await engine.dispose()
         logger.info("Background worker stopped.")
 
 
 def main() -> None:
+    parser=argparse.ArgumentParser(description="Run the ingestion worker or one specific queued job.")
+    parser.add_argument("--job-id",type=uuid.UUID,help="Process only this job once, then exit; never claim another job.")
+    args=parser.parse_args()
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
     try:
-        asyncio.run(run_worker())
+        asyncio.run(run_worker(job_id=args.job_id))
     except KeyboardInterrupt:
         pass
 

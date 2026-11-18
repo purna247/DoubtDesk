@@ -110,6 +110,7 @@ class JobService:
         db: AsyncSession,
         worker_id: str,
         lease_duration_seconds: int = 300,
+        job_id: Optional[uuid.UUID] = None,
     ) -> Optional[BackgroundJob]:
         """
         Claim the next pending job atomically.
@@ -129,6 +130,8 @@ class JobService:
             case((BackgroundJob.status == "queued", 0), else_=1),
             BackgroundJob.created_at.asc(),
         ).limit(1)
+        if job_id is not None:
+            stmt = stmt.where(BackgroundJob.id == job_id)
 
         # Check dialect for SKIP LOCKED support
         is_sqlite = db.bind and db.bind.dialect.name == "sqlite"
@@ -167,7 +170,7 @@ class JobService:
         return job
 
     @staticmethod
-    async def recover_expired_leases(db: AsyncSession) -> int:
+    async def recover_expired_leases(db: AsyncSession, job_id: Optional[uuid.UUID] = None) -> int:
         """
         Recover stalled or orphaned jobs whose lease expired (e.g. worker process crashed).
         Re-queues them if attempt_count < max_attempts; marks failed if exhausted.
@@ -181,6 +184,8 @@ class JobService:
                 BackgroundJob.lease_expires_at < now,
             )
         )
+        if job_id is not None:
+            stmt = stmt.where(BackgroundJob.id == job_id)
         if db.bind and db.bind.dialect.name != "sqlite":
             stmt = stmt.with_for_update(skip_locked=True)
         res = await db.execute(stmt)
