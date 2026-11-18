@@ -29,6 +29,7 @@ from app.modules.learning.schemas import (
     PracticeHintOut,
     PracticeAnswerRequest,
     PracticeAnswerResultOut,
+    StudentProgressSummaryResponse,
 )
 from app.modules.learning.scoring import ActivityEvaluationResult
 from app.modules.learning.service import LearningService
@@ -542,3 +543,24 @@ async def submit_adaptive_practice_answer(
         user_id=uuid.UUID(user.id),
         data=req,
     )
+
+
+# ------------------------------------------------------------------------------
+# Student Learning Progress Summary (/student/progress-summary)
+# ------------------------------------------------------------------------------
+
+@router.get("/student/progress-summary", response_model=StudentProgressSummaryResponse)
+async def get_student_progress_summary(
+    curriculum_subject_entry_id: Optional[uuid.UUID] = Query(None),
+    user: UserProfile = Depends(require_student),
+    db: AsyncSession = Depends(get_db),
+) -> StudentProgressSummaryResponse:
+    """Authoritative student learning progress summary across topics, practice questions, and interventions."""
+    tenant_id = _get_tenant_id(user)
+    return await LearningService.get_student_progress_summary(
+        db=db,
+        tenant_id=tenant_id,
+        user=user,
+        curriculum_subject_entry_id=curriculum_subject_entry_id,
+    )
+

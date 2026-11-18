@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
+  ArrowRight,
   Award,
   Calendar,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Clock,
   Copy,
   Download,
@@ -36,6 +39,9 @@ import type {
   FormalQuizRosterSummary,
   RosterStudentResult,
 } from '../../types/assessments';
+import type { StudentIntervention } from '../../types/interventions';
+import { StudentSupportCard } from './StudentSupportCard';
+import { StudentSupportWorkspace } from './StudentSupportWorkspace';
 
 interface QuizViewProps {
   onEarnPoints?: (pts: number) => void;
@@ -50,6 +56,7 @@ interface QuizViewProps {
     defaultTitle?: string;
   } | null;
   onClearInitialBuilderState?: () => void;
+  onRefreshProgress?: () => void;
 }
 
 interface QuizWithCourse {
@@ -78,31 +85,7 @@ interface McqPayloadOption {
   text: string;
 }
 
-interface StudentIntervention {
-  intervention_id: string;
-  title: string;
-  description?: string | null;
-  current_phase: string;
-  phase_a_unlocked: boolean;
-  phase_a_completed: boolean;
-  phase_a_assessment_id?: string | null;
-  phase_a_score?: number | null;
-  phase_b_unlocked: boolean;
-  phase_b_completed: boolean;
-  phase_b_primer_acknowledged: boolean;
-  require_primer_acknowledgment: boolean;
-  phase_b_primer_content?: string | null;
-  phase_b_practice_assessment_id?: string | null;
-  phase_b_items_completed: number;
-  phase_b_rule_description: string;
-  phase_c_unlocked: boolean;
-  phase_c_completed: boolean;
-  phase_c_assessment_id?: string | null;
-  phase_c_score?: number | null;
-  observed_score_change?: number | null;
-  outcome_status?: string | null;
-  offering?: CourseOffering;
-}
+
 
 const formatOfferingLabel = (offering?: CourseOffering): string => {
   if (!offering) return 'Assigned Course';
@@ -154,19 +137,37 @@ export const QuizView: React.FC<QuizViewProps> = ({
   offerings = [],
   initialBuilderState,
   onClearInitialBuilderState,
+  onRefreshProgress,
 }) => {
   const { role } = useAuth();
   const isTeacher = role === 'TEACHER' || role === 'ADMIN' || role === 'SUPER_ADMIN';
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const [quizzes, setQuizzes] = useState<QuizWithCourse[]>([]);
   const [interventions, setInterventions] = useState<StudentIntervention[]>([]);
-  const [acknowledgingGuide, setAcknowledgingGuide] = useState<string | null>(null);
-  const [guideError, setGuideError] = useState('');
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft'>('all');
 
-  // Active sub-mode within the existing center frame: 'list' | 'manual_form' | 'preview' | 'take_quiz'
-  const [mode, setMode] = useState<'list' | 'manual_form' | 'question_bank' | 'preview' | 'take_quiz'>('list');
+  // Active sub-mode within the existing center frame
+  const [mode, setMode] = useState<
+    'list' | 'manual_form' | 'question_bank' | 'preview' | 'take_quiz' | 'support_workspace'
+  >('list');
+
+  // Support Workspace & Context state
+  const [activeInterventionContext, setActiveInterventionContext] = useState<{
+    interventionId: string;
+    offeringId: string;
+    step: string;
+    intervention?: StudentIntervention;
+  } | null>(null);
+
+  const [activeSupportWorkspace, setActiveSupportWorkspace] = useState<{
+    intervention: StudentIntervention;
+    step: 'study' | 'results';
+  } | null>(null);
+
+  const [collapsedCompleted, setCollapsedCompleted] = useState(true);
 
   // AI Generator modal state
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
@@ -297,6 +298,75 @@ export const QuizView: React.FC<QuizViewProps> = ({
     void loadQuizzes();
   }, [loadQuizzes]);
 
+  // Restore intervention support workspace from URL parameters e.g. /quiz?offering=<id>&intervention=<id>&step=study
+  useEffect(() => {
+    if (mode === 'take_quiz') return;
+    const params = new URLSearchParams(location.search);
+    const intvId = params.get('intervention');
+    const offId = params.get('offering');
+    const stepParam = params.get('step') as 'study' | 'results' | null;
+
+    if (intvId && offId && !isTeacher) {
+      const match = interventions.find((i) => i.intervention_id === intvId);
+      if (match) {
+        setActiveSupportWorkspace({
+          intervention: match,
+          step: stepParam === 'results' ? 'results' : 'study',
+        });
+        setMode('support_workspace');
+      } else {
+        void apiClient
+          .get<StudentIntervention>(`/api/v1/courses/${offId}/interventions/${intvId}/student-view`)
+          .then((view) => {
+            const off = offerings.find((o) => o.id === offId);
+            setActiveSupportWorkspace({
+              intervention: { ...view, offering: off },
+              step: stepParam === 'results' ? 'results' : 'study',
+            });
+            setMode('support_workspace');
+          })
+          .catch(() => {});
+      }
+    }
+  }, [location.search, interventions, isTeacher, offerings]);
+
+  const openSupportWorkspace = (intv: StudentIntervention, step: 'study' | 'results') => {
+    setActiveSupportWorkspace({ intervention: intv, step });
+    setMode('support_workspace');
+    navigate(
+      `/quiz?offering=${intv.offering?.id || ''}&intervention=${intv.intervention_id}&step=${step}`,
+      { replace: true }
+    );
+  };
+
+  const handleBackFromSupportWorkspace = async () => {
+    setActiveSupportWorkspace(null);
+    setMode('list');
+    navigate('/quiz', { replace: true });
+    await loadQuizzes();
+    onRefreshProgress?.();
+  };
+
+  const visibleInterventions = useMemo(() => {
+    return interventions.filter((intv) => {
+      if (
+        selectedSubject !== 'all' &&
+        intv.offering?.curriculum_subject_entry_id !== selectedSubject
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [interventions, selectedSubject]);
+
+  const activeInterventions = useMemo(() => {
+    return visibleInterventions.filter((i) => i.current_phase !== 'completed');
+  }, [visibleInterventions]);
+
+  const completedInterventions = useMemo(() => {
+    return visibleInterventions.filter((i) => i.current_phase === 'completed');
+  }, [visibleInterventions]);
+
   const visibleQuizzes = useMemo(() => {
     return quizzes.filter(({ assessment, offering }) => {
       if (
@@ -309,6 +379,9 @@ export const QuizView: React.FC<QuizViewProps> = ({
         return false;
       }
       if (!isTeacher && assessment.status !== 'published') {
+        return false;
+      }
+      if (!isTeacher && assessment.assessment_type?.startsWith('intervention_')) {
         return false;
       }
       return true;
@@ -803,6 +876,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
       setSelectedAnswers(restored);
       setAttemptSummary(null);
       setMode('take_quiz');
+      navigate('/quiz', { replace: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Could not start quiz attempt.';
       onShowToast?.(msg);
@@ -871,6 +945,59 @@ export const QuizView: React.FC<QuizViewProps> = ({
     }
   };
 
+  const handleInterventionCardAction = async (actionKind: string, intv: StudentIntervention) => {
+    if (actionKind === 'start_baseline' || actionKind === 'resume_baseline') {
+      if (intv.phase_a_assessment_id) {
+        setActiveInterventionContext({
+          interventionId: intv.intervention_id,
+          offeringId: intv.offering?.id ?? '',
+          step: 'baseline',
+          intervention: intv,
+        });
+        await handleStartAssessmentById(
+          intv.phase_a_assessment_id,
+          `${intv.title} · Baseline`,
+          'intervention_baseline',
+          intv.offering
+        );
+      }
+    } else if (actionKind === 'open_guide' || actionKind === 'acknowledge_guide') {
+      openSupportWorkspace(intv, 'study');
+    } else if (actionKind === 'start_practice' || actionKind === 'resume_practice') {
+      if (intv.phase_b_practice_assessment_id) {
+        setActiveInterventionContext({
+          interventionId: intv.intervention_id,
+          offeringId: intv.offering?.id ?? '',
+          step: 'practice',
+          intervention: intv,
+        });
+        await handleStartAssessmentById(
+          intv.phase_b_practice_assessment_id,
+          `${intv.title} · Practice`,
+          'intervention_practice',
+          intv.offering
+        );
+      }
+    } else if (actionKind === 'start_reassessment' || actionKind === 'resume_reassessment') {
+      if (intv.phase_c_assessment_id) {
+        setActiveInterventionContext({
+          interventionId: intv.intervention_id,
+          offeringId: intv.offering?.id ?? '',
+          step: 'reassessment',
+          intervention: intv,
+        });
+        await handleStartAssessmentById(
+          intv.phase_c_assessment_id,
+          `${intv.title} · Reassessment`,
+          'intervention_post',
+          intv.offering
+        );
+      }
+    } else if (actionKind === 'view_results') {
+      openSupportWorkspace(intv, 'results');
+    }
+  };
+
   const handleStartAssessmentById = async (
     assessmentId: string,
     title: string,
@@ -905,6 +1032,22 @@ export const QuizView: React.FC<QuizViewProps> = ({
         onEarnPoints(Math.round(awarded * 10));
       }
       onShowToast?.(`Quiz submitted! Scored ${awarded} / ${summary.marks_available ?? 0} marks.`);
+
+      await loadQuizzes();
+      onRefreshProgress?.();
+
+      if (activeInterventionContext) {
+        try {
+          const updatedView = await apiClient.get<StudentIntervention>(
+            `/api/v1/courses/${activeInterventionContext.offeringId}/interventions/${activeInterventionContext.interventionId}/student-view`
+          );
+          setActiveInterventionContext((prev) =>
+            prev ? { ...prev, intervention: { ...updatedView, offering: prev.intervention?.offering } } : null
+          );
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Submission failed. Please retry.';
       onShowToast?.(msg);
@@ -912,6 +1055,98 @@ export const QuizView: React.FC<QuizViewProps> = ({
       setSubmittingAttempt(false);
     }
   };
+
+  const handleResultNextAction = async () => {
+    const ctx = activeInterventionContext;
+    if (!ctx) return;
+    let updatedIntv: StudentIntervention | null = ctx.intervention ?? null;
+    try {
+      const res = await apiClient.get<StudentIntervention>(
+        `/api/v1/courses/${ctx.offeringId}/interventions/${ctx.interventionId}/student-view`
+      );
+      const offering = offerings.find((o) => o.id === ctx.offeringId);
+      updatedIntv = { ...res, offering };
+    } catch {
+      /* ignore */
+    }
+
+    setActiveAttempt(null);
+    setAttemptSummary(null);
+    setActiveInterventionContext(null);
+
+    if (updatedIntv) {
+      if (ctx.step === 'reassessment') {
+        openSupportWorkspace(updatedIntv, 'results');
+      } else {
+        openSupportWorkspace(updatedIntv, 'study');
+      }
+    } else {
+      setMode('list');
+      await loadQuizzes();
+      onRefreshProgress?.();
+    }
+  };
+
+  const handleBackToQuizzesFromResult = async () => {
+    setActiveAttempt(null);
+    setAttemptSummary(null);
+    setActiveInterventionContext(null);
+    setMode('list');
+    navigate('/quiz', { replace: true });
+    await loadQuizzes();
+    onRefreshProgress?.();
+  };
+
+  // =========================================================================
+  // VIEW 0: Student Guided Support Workspace (Inline Center Column)
+  // =========================================================================
+  if (mode === 'support_workspace' && activeSupportWorkspace) {
+    return (
+      <StudentSupportWorkspace
+        intervention={activeSupportWorkspace.intervention}
+        step={activeSupportWorkspace.step}
+        onBack={() => void handleBackFromSupportWorkspace()}
+        onAcknowledgeGuide={async (intvId) => {
+          const offId = activeSupportWorkspace.intervention.offering?.id;
+          if (!offId) return;
+          await apiClient.post(
+            `/api/v1/courses/${offId}/interventions/${intvId}/acknowledge-study-guide`,
+            {}
+          );
+          const updated = await apiClient.get<StudentIntervention>(
+            `/api/v1/courses/${offId}/interventions/${intvId}/student-view`
+          );
+          setActiveSupportWorkspace((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  intervention: { ...updated, offering: prev.intervention.offering },
+                }
+              : null
+          );
+          await loadQuizzes();
+          onRefreshProgress?.();
+          onShowToast?.('Study guide acknowledged.');
+        }}
+        onStartAssessment={(assessmentId, title, ctx) => {
+          const type = ctx.step === 'practice' ? 'intervention_practice' : 'intervention_post';
+          setActiveInterventionContext({
+            interventionId: ctx.interventionId,
+            offeringId: ctx.offeringId,
+            step: ctx.step,
+            intervention: activeSupportWorkspace.intervention,
+          });
+          setActiveSupportWorkspace(null);
+          void handleStartAssessmentById(
+            assessmentId,
+            title,
+            type,
+            activeSupportWorkspace.intervention.offering
+          );
+        }}
+      />
+    );
+  }
 
   // =========================================================================
   // VIEW 1: Student CBT Quiz Taking Mode (Inside existing center column)
@@ -925,11 +1160,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
         <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-5 sm:p-6 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <button
-              onClick={() => {
-                setMode('list');
-                setActiveAttempt(null);
-                setAttemptSummary(null);
-              }}
+              onClick={() => void handleBackToQuizzesFromResult()}
               className="text-xs font-bold text-[#0A8FF5] hover:underline inline-flex items-center gap-1 mb-2 cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" /> Back to Quizzes
@@ -951,13 +1182,31 @@ export const QuizView: React.FC<QuizViewProps> = ({
         </div>
 
         {attemptSummary && (
-          <div className="p-6 rounded-[16px] bg-emerald-50 border border-emerald-200 text-center space-y-1.5">
+          <div className="p-6 rounded-[16px] bg-emerald-50 border border-emerald-200 text-center space-y-3">
             <CheckCircle2 className="w-9 h-9 text-emerald-600 mx-auto" />
             <h3 className="text-base font-bold text-emerald-900">Quiz Submitted</h3>
             <p className="text-sm font-semibold text-emerald-800">
               Score: <span className="font-black">{attemptSummary.marks_awarded ?? 0} / {attemptSummary.marks_available ?? totalMarks}</span> (
               {Math.round((attemptSummary.score_fraction ?? 0) * 100)}%)
             </p>
+
+            {/* Authoritative continuation button on Result Screen */}
+            {activeInterventionContext && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => void handleResultNextAction()}
+                  className="bg-[#0A8FF5] hover:bg-[#0980DC] text-white text-xs px-6 py-2.5 rounded-xl font-bold transition inline-flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <span>
+                    {activeInterventionContext.step === 'reassessment'
+                      ? 'View results'
+                      : 'Read study guide'}
+                  </span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -972,6 +1221,7 @@ export const QuizView: React.FC<QuizViewProps> = ({
             return (
               <div
                 key={item.id}
+                data-testid="quiz-question-item"
                 className={`p-5 sm:p-6 rounded-[16px] border bg-white space-y-4 ${
                   attemptSummary
                     ? isCorrect
@@ -1746,6 +1996,77 @@ export const QuizView: React.FC<QuizViewProps> = ({
         </div>
       )}
 
+      {/* Student Assigned Targeted Support Section (Above Ordinary Quizzes) */}
+      {!isTeacher && (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-[#111111]">Targeted Learning Support</h3>
+              <p className="text-xs text-[#4D5963] mt-0.5">
+                Complete your baseline, review the study guide and any assigned practice, then check your progress.
+              </p>
+            </div>
+            {activeInterventions.length > 0 && (
+              <span className="text-xs font-bold text-[#0A8FF5] bg-[#EAF5FF] px-2.5 py-1 rounded-full">
+                {activeInterventions.length} Active
+              </span>
+            )}
+          </div>
+
+          {activeInterventions.length === 0 && completedInterventions.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-xs text-slate-500">
+              No active learning support interventions currently assigned for this subject.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {activeInterventions.map((intv) => (
+                <StudentSupportCard
+                  key={intv.intervention_id}
+                  intervention={intv}
+                  onAction={handleInterventionCardAction}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Completed Interventions Section (Collapsible) */}
+          {completedInterventions.length > 0 && (
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setCollapsedCompleted(!collapsedCompleted)}
+                className="text-xs font-bold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                {collapsedCompleted ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                <span>Completed Support ({completedInterventions.length})</span>
+              </button>
+
+              {!collapsedCompleted && (
+                <div className="space-y-4 mt-3">
+                  {completedInterventions.map((intv) => (
+                    <StudentSupportCard
+                      key={intv.intervention_id}
+                      intervention={intv}
+                      onAction={handleInterventionCardAction}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Ordinary Quizzes Section Header for Students */}
+      {!isTeacher && (
+        <div className="border-t border-slate-200 pt-6">
+          <h3 className="text-base font-bold text-[#111111]">Course Assessments & Quizzes</h3>
+          <p className="text-xs text-[#4D5963] mt-0.5">
+            Course quizzes and formal assessments scheduled by faculty.
+          </p>
+        </div>
+      )}
+
       {/* Quizzes List / Loading / Empty State */}
       {loading ? (
         <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 text-center text-xs text-[#71808C]">
@@ -1990,126 +2311,6 @@ export const QuizView: React.FC<QuizViewProps> = ({
             );
           })}
         </div>
-      )}
-
-      {!isTeacher && interventions.length > 0 && (
-        <section className="rounded-[16px] border border-blue-200 bg-white p-5 space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-[#111111]">Targeted Learning Support</h3>
-            {guideError && <p role="alert" className="text-sm text-red-700">{guideError}</p>}
-            <p className="text-xs text-[#4D5963] mt-0.5">
-              Complete your baseline, review the study guide and any assigned practice, then check your progress.
-            </p>
-          </div>
-          <div className="space-y-3">
-            {interventions.map((x) => (
-              <article key={x.intervention_id} className="rounded-xl border border-[#DCE7EE] p-4 space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="text-sm font-semibold text-[#111111]">{x.title}</h4>
-                  <span className="text-[11px] font-semibold capitalize text-[#0A8FF5]">
-                    Phase: {x.current_phase.replace(/_/g, ' ')}
-                  </span>
-                </div>
-                {x.description && <p className="text-xs text-[#4D5963]">{x.description}</p>}
-                <div className="grid gap-2 sm:grid-cols-3 pt-1">
-                  <div className="rounded-lg bg-[#F8FAFC] p-3 text-xs">
-                    <p className="font-bold text-[#111111]">A · Baseline</p>
-                    <p className="mt-1 text-[#4D5963]">
-                      {x.phase_a_completed ? `Completed · score ${x.phase_a_score ?? 'pending'}` : 'Diagnostic assessment'}
-                    </p>
-                    {x.phase_a_unlocked && !x.phase_a_completed && x.phase_a_assessment_id && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void handleStartAssessmentById(
-                            x.phase_a_assessment_id!,
-                            `${x.title} · Baseline`,
-                            'intervention_baseline',
-                            x.offering
-                          )
-                        }
-                        className="mt-2 font-semibold text-[#0A8FF5] hover:underline cursor-pointer"
-                      >
-                        Start baseline
-                      </button>
-                    )}
-                  </div>
-                  <div className="rounded-lg bg-[#F8FAFC] p-3 text-xs">
-                    <p className="font-bold text-[#111111]">B · Study and practise</p>
-                    <p className="mt-1 text-[#4D5963]">
-                      {x.phase_b_completed ? 'Study and practice complete' : x.phase_b_rule_description}
-                    </p>
-                    {x.phase_b_unlocked && (
-                      <>
-                        {x.phase_b_primer_content && (
-                          <p className="mt-1.5 whitespace-pre-wrap text-[#4D5963]">{x.phase_b_primer_content}</p>
-                        )}
-                        {x.require_primer_acknowledgment && !x.phase_b_primer_acknowledged && (
-                          <button type="button" disabled={acknowledgingGuide === x.intervention_id}
-                            className="mt-3 block rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white disabled:opacity-50"
-                            onClick={async () => {
-                              if (!x.offering) return;
-                              setAcknowledgingGuide(x.intervention_id); setGuideError('');
-                              try {
-                                await apiClient.post(`/api/v1/courses/${x.offering.id}/interventions/${x.intervention_id}/acknowledge-study-guide`, {});
-                                await loadQuizzes();
-                              } catch { setGuideError('Could not record your acknowledgment. Please retry.'); }
-                              finally { setAcknowledgingGuide(null); }
-                            }}>
-                            {acknowledgingGuide === x.intervention_id ? 'Saving…' : 'I’ve reviewed the study guide'}
-                          </button>
-                        )}
-                        {x.phase_b_primer_acknowledged && <p className="mt-2 text-emerald-700">Study guide reviewed</p>}
-                        {x.phase_b_practice_assessment_id && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleStartAssessmentById(
-                                x.phase_b_practice_assessment_id!,
-                                `${x.title} · Practice`,
-                                'intervention_practice',
-                                x.offering
-                              )
-                            }
-                            className="mt-2 font-semibold text-[#0A8FF5] hover:underline cursor-pointer"
-                          >
-                            Start / resume practice
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  <div className="rounded-lg bg-[#F8FAFC] p-3 text-xs">
-                    <p className="font-bold text-[#111111]">C · Reassessment</p>
-                    <p className="mt-1 text-[#4D5963]">
-                      {x.phase_c_completed
-                        ? `Completed · score ${x.phase_c_score ?? 'pending'}`
-                        : x.phase_c_unlocked
-                          ? 'Ready to check your progress'
-                          : 'Complete the study guide and any assigned practice first'}
-                    </p>
-                    {x.phase_c_unlocked && !x.phase_c_completed && x.phase_c_assessment_id && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void handleStartAssessmentById(
-                            x.phase_c_assessment_id!,
-                            `${x.title} · Reassessment`,
-                            'intervention_post',
-                            x.offering
-                          )
-                        }
-                        className="mt-2 font-semibold text-[#0A8FF5] hover:underline cursor-pointer"
-                      >
-                        Start reassessment
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
       )}
 
       {/* AI Quiz Generator Modal (Reuses AskDoubtModal styling) */}

@@ -77,6 +77,16 @@ class InterventionAssignmentOut(BaseModel):
     assigned_at: datetime
 
 
+class StudentInterventionNextAction(BaseModel):
+    action_kind: str  # start_baseline | resume_baseline | open_guide | acknowledge_guide | start_practice | resume_practice | start_reassessment | resume_reassessment | view_results | retry_progress | unavailable
+    intervention_id: uuid.UUID
+    course_offering_id: uuid.UUID
+    assessment_id: Optional[uuid.UUID] = None
+    attempt_id: Optional[uuid.UUID] = None
+    label: str
+    availability_reason: Optional[str] = None
+
+
 class StudentInterventionViewOut(BaseModel):
     intervention_id: uuid.UUID
     title: str
@@ -104,6 +114,16 @@ class StudentInterventionViewOut(BaseModel):
     # Outcome
     observed_score_change: Optional[float] = None
     outcome_status: Optional[str] = None
+
+    # Authoritative attempt state & next action
+    baseline_attempt_state: str = "not_started"
+    baseline_attempt_id: Optional[uuid.UUID] = None
+    practice_attempt_state: Optional[str] = None
+    practice_attempt_id: Optional[uuid.UUID] = None
+    reassessment_attempt_state: Optional[str] = None
+    reassessment_attempt_id: Optional[uuid.UUID] = None
+    next_action: Optional[StudentInterventionNextAction] = None
+    availability_reason: Optional[str] = None
 
 
 class StudentInterventionListOut(StudentInterventionViewOut):

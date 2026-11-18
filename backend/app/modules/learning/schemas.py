@@ -187,3 +187,54 @@ class PracticeAnswerResultOut(BaseModel):
     next_question: Optional[PracticeQuestionOut] = None
 
 
+# ------------------------------------------------------------------------------
+# Student Progress Summary Schemas
+# ------------------------------------------------------------------------------
+
+class MetricSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str  # available | no_content | partial | unsupported
+    reason: Optional[str] = None
+    completed_count: Optional[int] = None
+    attempted_count: Optional[int] = None
+    eligible_count: Optional[int] = None
+    correct_count: Optional[int] = None
+    percentage: Optional[float] = None
+
+
+class RemainingSupportSummary(BaseModel):
+    active_count: int = 0
+    completed_count: int = 0
+    status: str = "available"
+
+
+class ContinueLearningSummary(BaseModel):
+    title: str
+    concept_name: Optional[str] = None
+    course_name: Optional[str] = None
+    action_kind: str
+    action_label: str
+    destination_url: str
+
+
+class CourseProgressSummary(BaseModel):
+    course_offering_id: UUID
+    curriculum_subject_entry_id: UUID
+    subject_code: str
+    subject_name: str
+    learning_topics: MetricSummary
+    teacher_material_practice: MetricSummary
+    remaining_support: RemainingSupportSummary
+    catalog_revision: Optional[int] = None
+
+
+class StudentProgressSummaryResponse(BaseModel):
+    learning_topics: MetricSummary
+    teacher_material_practice: MetricSummary
+    remaining_support: RemainingSupportSummary
+    continue_learning: Optional[ContinueLearningSummary] = None
+    per_offering: List[CourseProgressSummary] = []
+    updated_at: datetime
+
+

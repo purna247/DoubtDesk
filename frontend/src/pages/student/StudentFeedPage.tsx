@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { DesktopSidebar } from '../../components/layout/DesktopSidebar';
 import { RightSidebar, type MyDoubtStats } from '../../components/sidebar/RightSidebar';
+import { StudentLearningProgressSidebar } from '../../components/sidebar/StudentLearningProgressSidebar';
 import { FeedFilters } from '../../components/feed/FeedFilters';
 import { FeedCard } from '../../components/feed/FeedCard';
 import { PostDetailView } from '../../components/post/PostDetailView';
@@ -19,6 +20,7 @@ import { useAcademicOfferings } from '../../hooks/useAcademicOfferings';
 import { useDoubtsFeed, mapApiDoubt } from '../../hooks/useDoubtsFeed';
 import { apiClient } from '../../api/client';
 import type { DoubtItem } from '../../data/doubtsData';
+import type { StudentProgressSummaryResponse } from '../../types/interventions';
 
 const ROUTE_BY_TAB: Record<string, string> = {
   doubts: '/doubts',
@@ -65,6 +67,11 @@ export const StudentFeedPage: React.FC = () => {
   const [myStats, setMyStats] = useState<MyDoubtStats | null>(null);
   const [isStatsLoading, setIsStatsLoading] = useState(true);
 
+  // Authoritative learning progress summary for Quiz tab
+  const [progressSummary, setProgressSummary] = useState<StudentProgressSummaryResponse | null>(null);
+  const [isProgressLoading, setIsProgressLoading] = useState(false);
+  const [progressError, setProgressError] = useState<string | null>(null);
+
   const showToast = (msg: string) => setToastMessage(msg);
 
   // Shared hooks
@@ -91,9 +98,34 @@ export const StudentFeedPage: React.FC = () => {
     }
   }, []);
 
+  const fetchProgressSummary = useCallback(async () => {
+    setIsProgressLoading(true);
+    setProgressError(null);
+    try {
+      const params = new URLSearchParams();
+      if (selectedSubject && selectedSubject !== 'all') {
+        params.append('curriculum_subject_entry_id', selectedSubject);
+      }
+      const qs = params.toString();
+      const url = `/api/v1/student/progress-summary${qs ? `?${qs}` : ''}`;
+      const data = await apiClient.get<StudentProgressSummaryResponse>(url);
+      setProgressSummary(data);
+    } catch {
+      setProgressError('Could not load progress summary.');
+    } finally {
+      setIsProgressLoading(false);
+    }
+  }, [selectedSubject]);
+
   useEffect(() => {
     refreshMyStats();
   }, [refreshMyStats]);
+
+  useEffect(() => {
+    if (activeNavTab === 'quiz') {
+      void fetchProgressSummary();
+    }
+  }, [activeNavTab, fetchProgressSummary]);
 
   // Sync route
   useEffect(() => {
@@ -280,21 +312,31 @@ export const StudentFeedPage: React.FC = () => {
         }
         rightSidebar={
           viewMode !== 'profile' ? (
-            <RightSidebar
-              role="STUDENT"
-              studentName={studentDisplayName}
-              semester={studentSemester}
-              avatarUrl={user?.avatar_url || user?.avatarUrl}
-              stats={myStats}
-              isLoadingStats={isStatsLoading}
-              onOpenProfile={handleOpenProfile}
-              onSelectContributor={(name) => {
-                setSearchQuery(name);
-                setViewMode('feed');
-                setActiveDoubtId(null);
-                showToast(`Showing questions answered by ${name}`);
-              }}
-            />
+            activeNavTab === 'quiz' ? (
+              <StudentLearningProgressSidebar
+                summary={progressSummary}
+                isLoading={isProgressLoading}
+                error={progressError}
+                onRetry={fetchProgressSummary}
+                selectedSubject={selectedSubject}
+              />
+            ) : (
+              <RightSidebar
+                role="STUDENT"
+                studentName={studentDisplayName}
+                semester={studentSemester}
+                avatarUrl={user?.avatar_url || user?.avatarUrl}
+                stats={myStats}
+                isLoadingStats={isStatsLoading}
+                onOpenProfile={handleOpenProfile}
+                onSelectContributor={(name) => {
+                  setSearchQuery(name);
+                  setViewMode('feed');
+                  setActiveDoubtId(null);
+                  showToast(`Showing questions answered by ${name}`);
+                }}
+              />
+            )
           ) : undefined
         }
       >
@@ -323,7 +365,12 @@ export const StudentFeedPage: React.FC = () => {
         ) : activeNavTab === 'learn' ? (
           <LearnView selectedSubject={selectedSubject} offerings={studentOfferings} />
         ) : activeNavTab === 'quiz' ? (
-          <QuizView offerings={studentOfferings} selectedSubject={selectedSubject} onShowToast={showToast} />
+          <QuizView
+            offerings={studentOfferings}
+            selectedSubject={selectedSubject}
+            onShowToast={showToast}
+            onRefreshProgress={fetchProgressSummary}
+          />
         ) : activeNavTab === 'pyq' ? (
           <PYQView selectedSubject={selectedSubject} />
         ) : activeNavTab === 'studymaterial' ? (

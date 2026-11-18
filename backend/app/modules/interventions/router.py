@@ -261,7 +261,7 @@ async def acknowledge_study_guide(
     ))).scalars().one()
     if assignment.phase_b_primer_acknowledged_at is None:
         assignment.phase_b_primer_acknowledged_at = datetime.now(timezone.utc)
-        await db.flush()
+        await db.commit()
     return await InterventionService.get_student_intervention_view(
         db, tenant_id, course_offering_id, intervention_id, membership.id
     )

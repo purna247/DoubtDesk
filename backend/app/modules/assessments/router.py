@@ -323,7 +323,7 @@ async def list_course_assessments_student(
     assessments = (await db.execute(stmt)).scalars().all()
     results: List[AssessmentOut] = []
     for a in assessments:
-        if a.id in bound_intervention_assessment_ids:
+        if a.id in bound_intervention_assessment_ids or (a.assessment_type and a.assessment_type.startswith("intervention_")):
             continue
         serialized = AssessmentService.serialize_assessment(a, include_answer_key=False, published_only=True)
         if serialized.latest_version is not None:

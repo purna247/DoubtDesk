@@ -381,43 +381,37 @@ class AssessmentService:
                 "intervention_practice": Intervention.phase_b_practice_assessment_id,
                 "intervention_post": Intervention.phase_c_assessment_id,
             }[assessment.assessment_type]
-            bound_stmt = select(Intervention.id).where(
-                Intervention.institution_id == tenant_id,
-                Intervention.course_offering_id == assessment.course_offering_id,
-                Intervention.status.in_(["active", "published"]),
-                phase_column == assessment.id,
-            )
-            is_bound = (await db.execute(bound_stmt)).scalars().first() is not None
-
-            if is_bound:
-                assignment_stmt = (
-                    select(Intervention, InterventionAssignment)
-                    .join(InterventionAssignment, InterventionAssignment.intervention_id == Intervention.id)
-                    .where(
-                        Intervention.institution_id == tenant_id,
-                        Intervention.course_offering_id == assessment.course_offering_id,
-                        Intervention.status.in_(["active", "published"]),
-                        phase_column == assessment.id,
-                        InterventionAssignment.student_membership_id == student_membership_id,
-                    )
+            assignment_stmt = (
+                select(Intervention, InterventionAssignment)
+                .join(InterventionAssignment, InterventionAssignment.intervention_id == Intervention.id)
+                .where(
+                    Intervention.institution_id == tenant_id,
+                    Intervention.course_offering_id == assessment.course_offering_id,
+                    Intervention.status.in_(["active", "published"]),
+                    phase_column == assessment.id,
+                    InterventionAssignment.student_membership_id == student_membership_id,
                 )
-                assignments = (await db.execute(assignment_stmt)).all()
-                eligible = False
-                for intervention, assignment in assignments:
-                    if assessment.assessment_type == "intervention_baseline":
-                        eligible = True
-                    elif assessment.assessment_type == "intervention_practice":
-                        eligible = assignment.phase_a_completed_at is not None
-                    else:
-                        eligible = assignment.phase_b_completed_at is not None
-                    if eligible:
-                        break
-                if not eligible:
-                    raise AppException(
-                        status_code=403,
-                        code="INTERVENTION_PHASE_LOCKED",
-                        message="This assessment is not assigned to you or its intervention phase is still locked.",
+            )
+            assignments = (await db.execute(assignment_stmt)).all()
+            eligible = False
+            for intervention, assignment in assignments:
+                if assessment.assessment_type == "intervention_baseline":
+                    eligible = True
+                elif assessment.assessment_type == "intervention_practice":
+                    eligible = assignment.phase_a_completed_at is not None
+                else:
+                    eligible = (
+                        assignment.phase_b_completed_at is not None
+                        or (not intervention.phase_b_practice_assessment_id and assignment.phase_b_primer_acknowledged_at is not None)
                     )
+                if eligible:
+                    break
+            if not eligible:
+                raise AppException(
+                    status_code=403,
+                    code="INTERVENTION_PHASE_LOCKED",
+                    message="This assessment is not assigned to you or its intervention phase is still locked.",
+                )
 
         version = next((v for v in assessment.versions if v.status == "published"), None)
         if not version:

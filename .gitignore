@@ -2,8 +2,9 @@
 *.md
 !README.md
 docs/
-
-
+test-results/
+tests/
+scripts/
 # Local environment and secrets
 .env
 .env.*
@@ -33,6 +34,7 @@ test_*.py
 *_test.py
 *.test.*
 *.spec.*
+!frontend/e2e/**
 
 # Frontend
 node_modules/

@@ -28,6 +28,7 @@ from app.modules.interventions.schemas import (
     InterventionOut,
     InterventionConceptOut,
     InterventionAssignmentOut,
+    StudentInterventionNextAction,
     StudentInterventionViewOut,
     InterventionReportOut,
     PrimerDraftRequest,
@@ -562,6 +563,7 @@ class InterventionService:
         # Gate Phase C
         phase_b_done = assignment.phase_b_completed_at is not None
         phase_c_unlocked = phase_b_done
+        phase_c_done = assignment.phase_c_completed_at is not None
 
         # Determine current phase
         if not phase_a_done:
@@ -582,6 +584,159 @@ class InterventionService:
             rule_desc = "Review the study guide and acknowledge it to unlock reassessment."
         elif intervention.require_primer_acknowledgment:
             rule_desc = "Review and acknowledge the study guide. " + rule_desc
+
+        # Determine attempt states
+        async def _resolve_attempt_state(assessment_id: Optional[uuid.UUID]) -> tuple[str, Optional[uuid.UUID]]:
+            if not assessment_id:
+                return ("unavailable", None)
+            ass_row = (await db.execute(select(Assessment).where(
+                Assessment.id == assessment_id,
+                Assessment.institution_id == tenant_id,
+            ))).scalars().first()
+            if not ass_row or ass_row.status != "published":
+                return ("unavailable", None)
+
+            att_stmt = (
+                select(AssessmentAttempt)
+                .join(AssessmentVersion, AssessmentAttempt.assessment_version_id == AssessmentVersion.id)
+                .where(
+                    AssessmentVersion.assessment_id == assessment_id,
+                    AssessmentAttempt.student_membership_id == student_membership_id,
+                )
+                .order_by(AssessmentAttempt.created_at.desc())
+            )
+            latest_att = (await db.execute(att_stmt)).scalars().first()
+            if not latest_att:
+                return ("not_started", None)
+
+            if latest_att.status == "submitted":
+                return ("submitted", latest_att.id)
+            if latest_att.status == "expired":
+                return ("expired", latest_att.id)
+
+            now_t = datetime.now(timezone.utc)
+            if latest_att.expires_at:
+                exp = latest_att.expires_at if latest_att.expires_at.tzinfo else latest_att.expires_at.replace(tzinfo=timezone.utc)
+                if now_t > exp:
+                    return ("expired", latest_att.id)
+            return ("in_progress", latest_att.id)
+
+        a_state, a_att_id = await _resolve_attempt_state(intervention.phase_a_assessment_id)
+        b_state, b_att_id = (
+            await _resolve_attempt_state(intervention.phase_b_practice_assessment_id)
+            if intervention.phase_b_practice_assessment_id
+            else ("unavailable" if phase_b_unlocked and not intervention.phase_b_practice_assessment_id else None, None)
+        )
+        c_state, c_att_id = (
+            await _resolve_attempt_state(intervention.phase_c_assessment_id)
+            if intervention.phase_c_assessment_id
+            else ("unavailable", None)
+        )
+
+        has_primer = bool(intervention.phase_b_primer_content)
+        primer_ack = assignment.phase_b_primer_acknowledged_at is not None
+
+        # Build Authoritative Next Action
+        next_action: StudentInterventionNextAction
+        availability_reason: Optional[str] = None
+
+        if not phase_a_done:
+            if a_state == "unavailable":
+                availability_reason = "Baseline assessment is unavailable or not published."
+                next_action = StudentInterventionNextAction(
+                    action_kind="unavailable",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    label="Baseline unavailable",
+                    availability_reason=availability_reason,
+                )
+            elif a_state == "in_progress":
+                next_action = StudentInterventionNextAction(
+                    action_kind="resume_baseline",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    assessment_id=intervention.phase_a_assessment_id,
+                    attempt_id=a_att_id,
+                    label="Resume baseline",
+                )
+            else:
+                next_action = StudentInterventionNextAction(
+                    action_kind="start_baseline",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    assessment_id=intervention.phase_a_assessment_id,
+                    label="Start baseline",
+                )
+        elif has_primer and not primer_ack:
+            next_action = StudentInterventionNextAction(
+                action_kind="open_guide",
+                intervention_id=intervention.id,
+                course_offering_id=course_offering_id,
+                label="Read study guide",
+            )
+        elif intervention.phase_b_practice_assessment_id and not phase_b_done:
+            if b_state == "unavailable":
+                availability_reason = "Practice assessment is unavailable or not published."
+                next_action = StudentInterventionNextAction(
+                    action_kind="unavailable",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    label="Practice unavailable",
+                    availability_reason=availability_reason,
+                )
+            elif b_state == "in_progress":
+                next_action = StudentInterventionNextAction(
+                    action_kind="resume_practice",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    assessment_id=intervention.phase_b_practice_assessment_id,
+                    attempt_id=b_att_id,
+                    label="Resume practice",
+                )
+            else:
+                next_action = StudentInterventionNextAction(
+                    action_kind="start_practice",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    assessment_id=intervention.phase_b_practice_assessment_id,
+                    label="Start practice",
+                )
+        elif not phase_c_done:
+            if c_state == "unavailable":
+                availability_reason = "Reassessment is unavailable or not published."
+                next_action = StudentInterventionNextAction(
+                    action_kind="unavailable",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    label="Reassessment unavailable",
+                    availability_reason=availability_reason,
+                )
+            elif c_state == "in_progress":
+                next_action = StudentInterventionNextAction(
+                    action_kind="resume_reassessment",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    assessment_id=intervention.phase_c_assessment_id,
+                    attempt_id=c_att_id,
+                    label="Resume reassessment",
+                )
+            else:
+                next_action = StudentInterventionNextAction(
+                    action_kind="start_reassessment",
+                    intervention_id=intervention.id,
+                    course_offering_id=course_offering_id,
+                    assessment_id=intervention.phase_c_assessment_id,
+                    label="Start reassessment",
+                )
+        else:
+            next_action = StudentInterventionNextAction(
+                action_kind="view_results",
+                intervention_id=intervention.id,
+                course_offering_id=course_offering_id,
+                assessment_id=intervention.phase_c_assessment_id,
+                attempt_id=c_att_id,
+                label="View results",
+            )
 
         return StudentInterventionViewOut(
             intervention_id=intervention.id,
@@ -606,6 +761,14 @@ class InterventionService:
             phase_c_score=assignment.phase_c_score,
             observed_score_change=assignment.observed_score_change,
             outcome_status=assignment.outcome_status,
+            baseline_attempt_state=a_state,
+            baseline_attempt_id=a_att_id,
+            practice_attempt_state=b_state,
+            practice_attempt_id=b_att_id,
+            reassessment_attempt_state=c_state,
+            reassessment_attempt_id=c_att_id,
+            next_action=next_action,
+            availability_reason=availability_reason,
         )
 
     @staticmethod
