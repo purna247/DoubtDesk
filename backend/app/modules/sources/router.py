@@ -260,7 +260,12 @@ async def retry_academic_preparation(
         if not material.can_retry_academic:
             raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="There is no failed preparation for the current course sources.",status_code=409)
         # Re-read under the lock: another retry may have completed while waiting.
-        run=await db.scalar(select(AcademicExtractionRun).where(AcademicExtractionRun.course_offering_id==course_offering_id).order_by(AcademicExtractionRun.updated_at.desc()).limit(1))
+        eligible_run_id=(material.academic_summary or {}).get("run_id")
+        run=await db.scalar(select(AcademicExtractionRun).where(
+            AcademicExtractionRun.id==uuid.UUID(eligible_run_id),
+            AcademicExtractionRun.course_offering_id==course_offering_id,
+            AcademicExtractionRun.institution_id==_get_tenant_id(user),
+        ).execution_options(populate_existing=True)) if eligible_run_id else None
         if not run or run.status not in {"failed","running"}:
             raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="There is no failed academic preparation to retry.",status_code=409)
         previous=await db.scalar(select(BackgroundJob).where(BackgroundJob.target_entity_id==document_id,BackgroundJob.job_type=="extract_source_document").order_by(BackgroundJob.created_at.desc()).limit(1))
