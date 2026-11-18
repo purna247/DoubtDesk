@@ -45,6 +45,12 @@ def install_job_fence(db, job_id, worker_id):
 
 @asynccontextmanager
 async def course_execution_lock(db, offering_id: uuid.UUID):
+    async with course_execution_locks(db,[offering_id]) as acquired:
+        yield acquired
+
+
+@asynccontextmanager
+async def course_execution_locks(db, offering_ids):
     """Session advisory lock survives checkpoint commits; separate connection.
 
     PostgreSQL releases it on disconnect, including worker process death.
@@ -53,13 +59,19 @@ async def course_execution_lock(db, offering_id: uuid.UUID):
     if db.bind.dialect.name != 'postgresql':
         yield True
         return
-    key = int.from_bytes(hashlib.sha256(f'academic:{offering_id}'.encode()).digest()[:8], 'big', signed=True)
+    keys=[int.from_bytes(hashlib.sha256(f'academic:{offering_id}'.encode()).digest()[:8], 'big', signed=True) for offering_id in sorted(set(offering_ids),key=str)]
     async with db.bind.connect() as connection:
-        acquired = await connection.scalar(text('SELECT pg_try_advisory_lock(:key)'), {'key':key})
-        await connection.commit()
+        held=[]
         try:
-            yield acquired
+            for key in keys:
+                if not await connection.scalar(text('SELECT pg_try_advisory_lock(:key)'), {'key':key}):
+                    yield False
+                    return
+                held.append(key)
+            await connection.commit()
+            yield True
         finally:
-            if acquired:
+            for key in reversed(held):
                 await connection.execute(text('SELECT pg_advisory_unlock(:key)'), {'key':key})
+            if held:
                 await connection.commit()

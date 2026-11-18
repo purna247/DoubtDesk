@@ -214,7 +214,7 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
             return body,int(usage.get("promptTokenCount",estimate)),int(usage.get("candidatesTokenCount",0)),model
         except (httpx.HTTPError,KeyError,IndexError,ValueError,json.JSONDecodeError,RuntimeError) as exc:
             last_error=exc
-            detail={"model":model,"stage":stage,"error_type":type(exc).__name__,"elapsed_seconds":round(time.monotonic()-started,2)}
+            detail={**getattr(db,"info",{}).get("academic_context",{}),"model":model,"stage":stage,"error_type":type(exc).__name__,"elapsed_seconds":round(time.monotonic()-started,2)}
             if isinstance(exc,httpx.HTTPStatusError):
                 status=exc.response.status_code
                 detail["http_status"]=status
@@ -231,6 +231,7 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
                 logger.warning("Gemini request failed model=%s error=%s stage=%s",model,type(exc).__name__,stage)
                 if isinstance(exc,httpx.TimeoutException):_MODEL_COOLDOWN_UNTIL[model]=time.monotonic()+300
             attempts.append(detail)
+            logger.warning("Academic provider attempt: %s",json.dumps(detail,sort_keys=True))
             if repair:break
     if len(exhausted)==len(models):raise QuotaExhausted("All configured Gemini daily request quotas are exhausted.")
     if any(isinstance(last_error,t) for t in (httpx.HTTPError,RuntimeError)):
@@ -385,24 +386,71 @@ async def _repair_invalid_items(db:AsyncSession,run:AcademicExtractionRun,chunks
     return unresolved_modules,unresolved_questions
 
 
-async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,job_id:uuid.UUID)->dict[str,Any]:
-    from contextlib import AsyncExitStack
-    from app.modules.jobs.execution import course_execution_lock
+async def _academic_offerings(db,trigger_doc,job_id):
     offerings=(await db.execute(select(SourceDocumentCourseOffering.course_offering_id).where(SourceDocumentCourseOffering.source_document_id==trigger_doc.id))).scalars().all()
-    async with AsyncExitStack() as stack:
-        for offering_id in sorted(set(offerings),key=str):
-            acquired=await stack.enter_async_context(course_execution_lock(db,offering_id))
-            if not acquired:
-                from app.modules.jobs.service import JobService
-                await JobService.defer_job(db,job_id,"waiting_for_course_build",30,"Another worker is preparing this course; saved progress will be reused.")
-                return {"deferred":True,"complete":False}
+    job=await db.get(BackgroundJob,job_id)
+    if job and (job.input_reference_json or {}).get("academic_only"):
+        return [job.scope_course_offering_id] if job.scope_course_offering_id in offerings else []
+    return offerings
+
+
+async def _academic_progress(db,job_id,run,stage,batch_index,total):
+    from app.modules.jobs.service import JobService
+    context={"job_id":str(job_id),"run_id":str(run.id),"batch_index":batch_index,"total_batches":total}
+    db.info["academic_context"]=context
+    job=await db.get(BackgroundJob,job_id)
+    if job:
+        checkpoint=dict(job.checkpoint_json or {})
+        checkpoint["academic_progress"]={**context,"stage":stage}
+        job.checkpoint_json=checkpoint
+        progress=92 if stage=="academic_syllabus" else 93+3*batch_index/max(1,total) if stage=="academic_questions" else 96+3*batch_index/max(1,total)
+        await JobService.update_progress(db,job_id,stage,progress,f"Preparing {stage.removeprefix('academic_')} batch {batch_index+1} of {total}; validated checkpoints are retained.",context)
+
+
+async def _cached_run_complete(db,run,all_rows):
+    """Legacy 'succeeded' flags alone do not prove a complete course build."""
+    batches=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.status=="validated"))).scalars().all()
+    by_stage={(b.stage,b.batch_index):b for b in batches}
+    syllabus=by_stage.get(("analysis_syllabus",0))
+    syllabus_ids=[str(c.id) for d,c in all_rows if d.source_type=="syllabus"]
+    if not syllabus or syllabus.source_chunk_ids!=syllabus_ids:return False
+    modules=(syllabus.response_json or {}).get("modules",[])
+    if not modules:return False
+    question_ids=[str(c.id) for d,c in all_rows if d.source_type=="question_paper"]
+    for index,start in enumerate(range(0,len(question_ids),QUESTION_BATCH_SIZE)):
+        batch=by_stage.get(("analysis_questions",index))
+        if not batch or batch.source_chunk_ids!=question_ids[start:start+QUESTION_BATCH_SIZE]:return False
+    expected=set()
+    try:
+        for index,module in enumerate(modules):
+            if not any(c.get("confidence",0)>=CONFIDENCE_THRESHOLD for t in module.get("topics",[]) for c in t.get("concepts",[])):continue
+            batch=by_stage.get(("grouping",index))
+            if not batch:return False
+            plan=NodePlan.model_validate(batch.response_json)
+            if not plan.nodes:return False
+            expected.update(f"AI-{run.id.hex[:8]}-{index+1}-{n}" for n in range(1,len(plan.nodes)+1))
+    except (ValueError,TypeError):return False
+    actual=set((await db.execute(select(LearningNode.node_code).where(LearningNode.course_offering_id==run.course_offering_id,LearningNode.node_code.like(f"AI-{run.id.hex[:8]}-%")))).scalars().all())
+    return bool(expected) and expected<=actual
+
+
+async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,job_id:uuid.UUID)->dict[str,Any]:
+    from app.modules.jobs.execution import course_execution_locks
+    if trigger_doc.source_type not in {"syllabus","question_paper"}:
+        return {"skipped":True,"complete":True}
+    offerings=await _academic_offerings(db,trigger_doc,job_id)
+    async with course_execution_locks(db,offerings) as acquired:
+        if not acquired:
+            from app.modules.jobs.service import JobService
+            await JobService.defer_job(db,job_id,"waiting_for_course_build",30,"Another worker is preparing this course; saved progress will be reused.")
+            return {"deferred":True,"complete":False}
         return await _process_academic_document(db,trigger_doc,job_id)
 
 
 async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,job_id:uuid.UUID)->dict[str,Any]:
     """Run syllabus structure extraction, batched question extraction, then one dynamic grouping call per module."""
     settings=get_settings()
-    offering_ids=(await db.execute(select(SourceDocumentCourseOffering.course_offering_id).where(SourceDocumentCourseOffering.source_document_id==trigger_doc.id))).scalars().all()
+    offering_ids=await _academic_offerings(db,trigger_doc,job_id)
     out={"runs":[],"warnings_count":0,"has_warnings":False,"usable_batches":0,"validated_batches":0,"complete":True,"skipped":False,"deferred":False}
     if trigger_doc.source_type not in {"syllabus","question_paper"} or not offering_ids:
         out["skipped"]=True;return out
@@ -423,9 +471,18 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
         aggregate=hashlib.sha256("|".join(sorted(checksum_material)).encode()).hexdigest()
         pipeline_key=hashlib.sha256(f"{aggregate}:{settings.GEMINI_MODEL}:{settings.GEMINI_FALLBACK_MODELS}:{settings.GEMINI_REPAIR_MODEL}:{PROMPT_VERSION}".encode()).hexdigest()
         run=(await db.execute(select(AcademicExtractionRun).where(AcademicExtractionRun.course_offering_id==offering_id,AcademicExtractionRun.pipeline_key==pipeline_key))).scalars().first()
+        job=await db.get(BackgroundJob,job_id)
+        previous_run_id=(job.input_reference_json or {}).get("previous_run_id") if job else None
+        if not run and previous_run_id:
+            # Deliberate configuration repair may select another provider without
+            # invalidating grounded outputs produced by the same prompt and inputs.
+            # Keep original run/key/batch IDs; cached generation metadata is retained.
+            previous=await db.get(AcademicExtractionRun,uuid.UUID(previous_run_id))
+            if previous and previous.institution_id==trigger_doc.institution_id and previous.course_offering_id==offering_id and previous.content_checksum==aggregate and previous.prompt_version==PROMPT_VERSION:
+                run=previous
         unresolved_groupings=await db.scalar(select(func.count()).select_from(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="grouping",AcademicExtractionBatch.status=="flagged_for_review")) if run else 0
         persisted_nodes=await db.scalar(select(func.count()).select_from(LearningNode).where(LearningNode.course_offering_id==offering_id,LearningNode.node_code.like(f"AI-{run.id.hex[:8]}-%"))) if run else 0
-        if run and run.status=="succeeded" and not unresolved_groupings and persisted_nodes:
+        if run and run.status=="succeeded" and not unresolved_groupings and persisted_nodes and await _cached_run_complete(db,run,all_rows):
             out["runs"].append({"run_id":str(run.id),"cached":True,"warnings_count":run.warnings_count,"has_warnings":run.has_warnings});out["warnings_count"]+=run.warnings_count;out["has_warnings"]|=run.has_warnings;out["usable_batches"]+=1;continue
         if not run:
             run=AcademicExtractionRun(institution_id=trigger_doc.institution_id,source_document_id=trigger_doc.id,course_offering_id=offering_id,content_checksum=aggregate,pipeline_key=pipeline_key,model_name=settings.GEMINI_MODEL,prompt_version=PROMPT_VERSION,status="running");db.add(run);await db.flush()
@@ -446,7 +503,7 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
         chunks_by_id={str(c.id):c for _,c in all_rows}
         syllabus_rows=[(d,c) for d,c in all_rows if d.source_type=="syllabus"]
         question_rows=[(d,c) for d,c in all_rows if d.source_type=="question_paper"]
-        stale_failed=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage.in_(["analysis","analysis_syllabus","analysis_questions","repair"]),AcademicExtractionBatch.warning_code.in_(["ANALYSIS_FAILED","ANALYSIS_RESPONSE_INVALID","GEMINI_PROVIDER_UNAVAILABLE","GEMINI_PROVIDER_REQUEST_FAILED","ITEMS_NEED_REVIEW"])))).scalars().all()
+        stale_failed=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage.in_(["analysis","analysis_syllabus","analysis_questions","repair"]),AcademicExtractionBatch.warning_code.in_(["ANALYSIS_FAILED","ANALYSIS_RESPONSE_INVALID","GEMINI_PROVIDER_UNAVAILABLE","GEMINI_PROVIDER_REQUEST_FAILED","ITEMS_NEED_REVIEW","CHECKPOINT_SOURCE_MISMATCH"])))).scalars().all()
         for batch in stale_failed:
             if batch.status=="validated":continue
             await db.delete(batch)
@@ -464,6 +521,7 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
                 if syllabus_batch and syllabus_batch.source_chunk_ids==[str(c.id) for _,c in syllabus_rows] and syllabus_batch.response_json:
                     validated_modules=syllabus_batch.response_json.get("modules",[])
                 else:
+                    await _academic_progress(db,job_id,run,"academic_syllabus",0,1)
                     raw_syl,in_tokens,out_tokens,actual_model=await _gemini_json(db,_analysis_syllabus_prompt(syllabus_rows),"syllabus")
                     run.model_name=actual_model;run.input_tokens+=in_tokens;run.output_tokens+=out_tokens
                     valid_modules=[];invalid_modules=[]
@@ -480,7 +538,7 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
                     validated_modules=_dedupe_modules(valid_modules)
                     if not validated_modules:
                         raise ValueError("no_valid_syllabus_modules")
-                    db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis_syllabus",batch_index=0,status="validated",source_chunk_ids=[str(c.id) for _,c in syllabus_rows],response_json={"modules":validated_modules},attempts=1,input_tokens=in_tokens,output_tokens=out_tokens))
+                    db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis_syllabus",batch_index=0,status="validated",source_chunk_ids=[str(c.id) for _,c in syllabus_rows],response_json={"modules":validated_modules,"generation_model":actual_model},attempts=1,input_tokens=in_tokens,output_tokens=out_tokens))
                     await db.commit()
 
                 question_source_ids={str(c.id) for _,c in question_rows}
@@ -489,6 +547,7 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
                 unresolved_q_all:list[dict[str,Any]]=[]
                 for b_idx,start in enumerate(range(0,len(question_rows),QUESTION_BATCH_SIZE)):
                     q_slice=question_rows[start:start+QUESTION_BATCH_SIZE]
+                    await _academic_progress(db,job_id,run,"academic_questions",b_idx,(len(question_rows)+QUESTION_BATCH_SIZE-1)//QUESTION_BATCH_SIZE)
                     cached_batch=existing_q_batches.get(b_idx)
                     if cached_batch and cached_batch.source_chunk_ids!=[str(c.id) for _,c in q_slice]:
                         raise CheckpointMismatch("Saved question checkpoint does not match the current source chunk IDs. Existing validated output was retained; investigate input provenance before retrying.")
@@ -508,7 +567,7 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
                     if slice_invalid:
                         _,unresolved_q=await _repair_invalid_items(db,run,chunks_by_id,[],slice_invalid,valid_concept_keys,question_source_ids,validated_modules,slice_valid)
                         unresolved_q_all.extend(unresolved_q)
-                    db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis_questions",batch_index=b_idx,status="validated",source_chunk_ids=[str(c.id) for _,c in q_slice],response_json={"questions":slice_valid},attempts=1,input_tokens=qin,output_tokens=qout))
+                    db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis_questions",batch_index=b_idx,status="validated",source_chunk_ids=[str(c.id) for _,c in q_slice],response_json={"questions":slice_valid,"generation_model":qmodel},attempts=1,input_tokens=qin,output_tokens=qout))
                     validated_questions.extend(slice_valid)
                     await db.commit()
                 if unresolved_q_all:
@@ -561,6 +620,7 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
         question_ids=await _persist_questions(db,trigger_doc,run,offering_id,teacher_id,validated_questions,concepts_by_key,chunks_by_id)
         await db.flush()
         try:
+            db.info["academic_job_id"]=job_id
             grouping_count=await _make_dynamic_nodes(db,trigger_doc,run,version,teacher_id,validated_modules,concepts_by_key,question_ids)
             out["usable_batches"]+=1 if validated_modules or validated_questions else 0
             if grouping_count:out["usable_batches"]+=grouping_count
@@ -761,6 +821,9 @@ def _reconcile_grouping_plan(plan:NodePlan,module_questions:list[dict],concepts:
 async def _make_dynamic_nodes(db,doc,run,version,teacher_id,modules,concepts_by_key,question_ids)->int:
     count=0
     for module_index,module in enumerate(modules):
+        job_id=db.info.get("academic_job_id")
+        if job_id:
+            await _academic_progress(db,job_id,run,"academic_grouping",module_index,len(modules))
         mod_variants=_module_variants(module["title"])
         concepts=[]
         for topic in module.get("topics",[]):
@@ -799,16 +862,21 @@ async def _make_dynamic_nodes(db,doc,run,version,teacher_id,modules,concepts_by_
             node_code=f"AI-{run.id.hex[:8]}-{module_index+1}-{node_index}"
             existing=await db.scalar(select(LearningNode).where(LearningNode.course_offering_id==version.course_offering_id,LearningNode.node_code==node_code))
             if existing:
-                created_by_key[node_data.node_key]=existing
                 if existing.module_title is None:existing.module_title=module["title"]
                 if existing.difficulty_rank is None:existing.difficulty_rank=node_data.difficulty_rank
-                continue
-            node=LearningNode(institution_id=doc.institution_id,course_offering_id=version.course_offering_id,course_content_version_id=version.id,node_code=node_code,module_title=module["title"],difficulty_rank=node_data.difficulty_rank,title=node_data.title,description=node_data.objective,sequence_no=module_index*1000+node_index,status="draft",created_by_user_id=teacher_id);db.add(node);await db.flush();created_by_key[node_data.node_key]=node
-            for concept_id in node_data.concept_ids:db.add(LearningNodeConcept(institution_id=doc.institution_id,learning_node_id=node.id,concept_id=uuid.UUID(concept_id),relationship_role="primary",mapping_status="teacher_approved"))
+                node=existing
+            else:
+                node=LearningNode(institution_id=doc.institution_id,course_offering_id=version.course_offering_id,course_content_version_id=version.id,node_code=node_code,module_title=module["title"],difficulty_rank=node_data.difficulty_rank,title=node_data.title,description=node_data.objective,sequence_no=module_index*1000+node_index,status="draft",created_by_user_id=teacher_id);db.add(node);await db.flush();count+=1
+            created_by_key[node_data.node_key]=node
+            for concept_id in node_data.concept_ids:
+                if not await db.scalar(select(LearningNodeConcept.id).where(LearningNodeConcept.learning_node_id==node.id,LearningNodeConcept.concept_id==uuid.UUID(concept_id)).limit(1)):
+                    db.add(LearningNodeConcept(institution_id=doc.institution_id,learning_node_id=node.id,concept_id=uuid.UUID(concept_id),relationship_role="primary",mapping_status="teacher_approved"))
             for question_version_id in node_data.question_ids:
                 q=question_ids[question_version_id]
-                db.add(LearningNodeQuestion(institution_id=doc.institution_id,learning_node_id=node.id,question_id=uuid.UUID(q["question_id"]),question_version_id=uuid.UUID(question_version_id),relationship_role="practice"))
-            objective=LearningObjective(institution_id=doc.institution_id,course_content_version_id=version.id,concept_id=uuid.UUID(node_data.concept_ids[0]),objective_code=f"LO-{node.id.hex[:16]}",description=node_data.objective,bloom_level="understand",sequence_no=node.sequence_no);db.add(objective);count+=1
+                if not await db.scalar(select(LearningNodeQuestion.id).where(LearningNodeQuestion.learning_node_id==node.id,LearningNodeQuestion.question_version_id==uuid.UUID(question_version_id)).limit(1)):
+                    db.add(LearningNodeQuestion(institution_id=doc.institution_id,learning_node_id=node.id,question_id=uuid.UUID(q["question_id"]),question_version_id=uuid.UUID(question_version_id),relationship_role="practice"))
+            if not await db.scalar(select(LearningObjective.id).where(LearningObjective.course_content_version_id==version.id,LearningObjective.objective_code==f"LO-{node.id.hex[:16]}").limit(1)):
+                db.add(LearningObjective(institution_id=doc.institution_id,course_content_version_id=version.id,concept_id=uuid.UUID(node_data.concept_ids[0]),objective_code=f"LO-{node.id.hex[:16]}",description=node_data.objective,bloom_level="understand",sequence_no=node.sequence_no))
         seen_prereqs:set[tuple[uuid.UUID,uuid.UUID]]=set()
         for node_data in plan.nodes:
             current=created_by_key.get(node_data.node_key)

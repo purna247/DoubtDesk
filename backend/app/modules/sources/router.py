@@ -201,14 +201,16 @@ async def list_teacher_course_materials(
         status="not_required"
         if required:
             status=active_course_job.status if active_course_job else course_run.status if course_run else "waiting_for_materials"
+            if status=="running" and not active_course_job:
+                status="failed"
         return {
             "academic_status":status,
             "academic_summary":{
                 "run_id":str(course_run.id),"validated_batches":sum(b.status=="validated" for b in batches),
                 "completed_question_batches":sum(b.stage=="analysis_questions" and b.status=="validated" for b in batches),
-                "safe_error_summary":course_run.safe_error_summary,"warnings_count":course_run.warnings_count,
+                "safe_error_summary":course_run.safe_error_summary or ("Academic preparation was interrupted and has no active job. Saved checkpoints can be resumed." if status=="failed" and course_run.status=="running" else None),"warnings_count":course_run.warnings_count,
             } if required and course_run else None,
-            "can_retry_academic":required and document.status=="processed" and not active_course_job and bool(course_run and course_run.status=="failed"),
+            "can_retry_academic":required and document.status=="processed" and not active_course_job and bool(course_run and status=="failed"),
             "worker_available":health["available"],"worker_last_seen_at":health["last_seen_at"],
         }
 
@@ -259,7 +261,7 @@ async def retry_academic_preparation(
             raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="There is no failed preparation for the current course sources.",status_code=409)
         # Re-read under the lock: another retry may have completed while waiting.
         run=await db.scalar(select(AcademicExtractionRun).where(AcademicExtractionRun.course_offering_id==course_offering_id).order_by(AcademicExtractionRun.updated_at.desc()).limit(1))
-        if not run or run.status!="failed":
+        if not run or run.status not in {"failed","running"}:
             raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="There is no failed academic preparation to retry.",status_code=409)
         previous=await db.scalar(select(BackgroundJob).where(BackgroundJob.target_entity_id==document_id,BackgroundJob.job_type=="extract_source_document").order_by(BackgroundJob.created_at.desc()).limit(1))
         active=await JobService.enqueue_job(db,"extract_source_document","source_document",document_id,
