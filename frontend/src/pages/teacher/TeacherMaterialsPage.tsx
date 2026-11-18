@@ -20,6 +20,10 @@ interface LibraryMaterial extends SourceDocument {
   job_stage?: string | null;
   job_progress_percent?: number | null;
   job_error_summary?: string | null;
+  academic_status?: string;
+  academic_summary?: { validated_batches: number; safe_error_summary?: string | null; warnings_count: number } | null;
+  can_retry_academic?: boolean;
+  worker_available?: boolean;
 }
 
 interface SourceChunk {
@@ -66,6 +70,23 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
   const [materialTypeFilter, setMaterialTypeFilter] = useState('all');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [retryingMaterialId, setRetryingMaterialId] = useState('');
+
+  const retryAcademic = async (material: LibraryMaterial) => {
+    setRetryingMaterialId(material.id);
+    try {
+      const result = await apiClient.post<{ job_id: string; message: string }>(
+        `/api/v1/sources/${material.id}/retry-academic?course_offering_id=${offeringId}`, {},
+      );
+      setDocument(material);
+      setJobId(result.job_id);
+      setJob(null);
+      setMessage(result.message);
+      await loadMaterials();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Academic preparation could not be queued.');
+    } finally { setRetryingMaterialId(''); }
+  };
 
   const chunks = useMemo(
     () => extractions.flatMap((extraction) => extraction.chunks ?? []),
@@ -227,7 +248,31 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
             </form>
             <div className="border-t border-slate-100 pt-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-bold text-slate-900">Course material library</h3><select aria-label="Filter materials by type" value={materialTypeFilter} onChange={(event) => setMaterialTypeFilter(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"><option value="all">All material types</option><option value="syllabus">Syllabus</option><option value="question_paper">Question papers / PYQs</option><option value="lecture_notes">Lecture notes</option><option value="slides">Slides</option><option value="lab_manual">Lab manuals</option><option value="reference_material">Reference material</option></select></div>
-              {materials.filter((material) => materialTypeFilter === 'all' || material.source_type === materialTypeFilter).length ? <div className="space-y-2">{materials.filter((material) => materialTypeFilter === 'all' || material.source_type === materialTypeFilter).map((material) => <button key={material.id} onClick={() => { setDocument(material); setJobId(material.job_id || ''); setJob(material.job_status ? { status: material.job_status, current_stage: material.job_stage || material.job_status, progress_percent: material.job_progress_percent || 0, safe_error_summary: material.job_error_summary } : null); void refreshExtractions(material.id); }} className={`w-full rounded-xl border p-3 text-left ${document?.id === material.id ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}><div className="flex flex-wrap items-start justify-between gap-2"><span className="break-all text-sm font-semibold text-slate-900">{material.original_filename}</span><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${material.status === 'processed' ? 'bg-emerald-50 text-emerald-700' : material.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-800'}`}>{material.status === 'processed' ? 'Ready for students' : (material.job_status || material.status).replace('_', ' ')}</span></div><div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-slate-500"><span>{material.source_type.replace('_', ' ')}</span>{material.job_stage && <span>{material.job_stage.replace(/_/g, ' ')}</span>}{material.job_progress_percent !== null && material.job_progress_percent !== undefined && <span>{Math.round(material.job_progress_percent)}%</span>}</div>{material.job_error_summary && <p className="mt-1 text-xs text-rose-700">{material.job_error_summary}</p>}</button>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No materials are recorded for this course yet.</p>}
+              {materials.filter((material) => materialTypeFilter === 'all' || material.source_type === materialTypeFilter).length ? <div className="space-y-2">
+                {materials.filter((material) => materialTypeFilter === 'all' || material.source_type === materialTypeFilter).map((material) => {
+                  const academicFailed = material.academic_status === 'failed';
+                  const academicActive = ['queued', 'running', 'retrying'].includes(material.academic_status || '');
+                  const error = academicFailed ? (material.academic_summary?.safe_error_summary || material.job_error_summary) : material.job_status === 'failed' && !academicActive && material.academic_status !== 'succeeded' ? material.job_error_summary : null;
+                  return <div key={material.id} className={`rounded-xl border p-3 ${document?.id === material.id ? 'border-blue-400 bg-blue-50' : 'border-slate-200'}`}>
+                    <button type="button" onClick={() => { setDocument(material); setJobId(material.job_id || ''); setJob(material.job_status ? { status: material.job_status, current_stage: material.job_stage || material.job_status, progress_percent: material.job_progress_percent || 0, safe_error_summary: material.job_error_summary } : null); void refreshExtractions(material.id); }} className="w-full text-left">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <span className="break-all text-sm font-semibold text-slate-900">{material.original_filename}</span>
+                        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${material.status === 'processed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>{material.status === 'processed' ? 'Material available' : (material.job_status || material.status).replace(/_/g, ' ')}</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                        <span>{material.source_type.replace(/_/g, ' ')}</span>
+                        {material.academic_status !== 'not_required' && <span className={academicFailed ? 'text-rose-700' : ''}>Academic preparation: {(material.academic_status || 'unknown').replace(/_/g, ' ')}</span>}
+                        {material.academic_summary && <span>{material.academic_summary.validated_batches} validated batches retained</span>}
+                        {material.job_stage && <span>Last stage: {material.job_stage.replace(/_/g, ' ')}</span>}
+                        {material.job_progress_percent != null && <span>{Math.round(material.job_progress_percent)}%{material.job_status === 'failed' ? ' before failure' : ''}</span>}
+                      </div>
+                    </button>
+                    {error && <p className="mt-2 text-xs text-rose-700" role="status">{error}</p>}
+                    {academicActive && !material.worker_available && <p className="mt-2 text-xs text-amber-800">No recent worker heartbeat. Queued work needs an ingestion worker; running work may be interrupted.</p>}
+                    {material.can_retry_academic && <button type="button" disabled={!!retryingMaterialId} onClick={() => void retryAcademic(material)} className="mt-2 rounded-lg border border-blue-300 px-3 py-2 text-xs font-semibold text-blue-700 disabled:opacity-50">{retryingMaterialId === material.id ? 'Queuing...' : 'Retry academic preparation'}</button>}
+                  </div>;
+                })}
+              </div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No materials are recorded for this course yet.</p>}
             </div>
             {message && <p className="text-sm text-slate-600" role="status">{message}</p>}
             {job && <div className="space-y-2">

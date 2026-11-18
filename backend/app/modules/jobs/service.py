@@ -5,11 +5,57 @@ from sqlalchemy import select, and_, or_, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.modules.jobs.models import BackgroundJob, BackgroundJobEvent
+from app.modules.jobs.models import BackgroundJob, BackgroundJobEvent, WorkerHeartbeat
 
 
 class JobService:
     """PostgreSQL-backed durable job queue with transactional claiming and lease recovery."""
+
+    @staticmethod
+    async def heartbeat(db: AsyncSession, worker_id: str) -> None:
+        now = datetime.now(timezone.utc)
+        heartbeat = await db.get(WorkerHeartbeat, worker_id)
+        if heartbeat is None:
+            db.add(WorkerHeartbeat(worker_id=worker_id, last_seen_at=now))
+        else:
+            heartbeat.last_seen_at = now
+        # Retain a bounded recent history rather than one row per process forever.
+        from sqlalchemy import delete
+        await db.execute(delete(WorkerHeartbeat).where(WorkerHeartbeat.last_seen_at < now-timedelta(days=7)))
+        await db.commit()
+
+    @staticmethod
+    async def worker_health(db: AsyncSession) -> dict:
+        from sqlalchemy import func
+        last_seen = await db.scalar(select(func.max(WorkerHeartbeat.last_seen_at)))
+        if last_seen and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        return {"available":bool(last_seen and (datetime.now(timezone.utc)-last_seen).total_seconds()<60),"last_seen_at":last_seen}
+
+    @staticmethod
+    async def renew_lease(db: AsyncSession, job_id: uuid.UUID, worker_id: str, seconds: int) -> bool:
+        now = datetime.now(timezone.utc)
+        result = await db.execute(update(BackgroundJob).where(
+            BackgroundJob.id==job_id, BackgroundJob.status=="running",
+            BackgroundJob.lease_owner==worker_id, BackgroundJob.lease_expires_at>now,
+        ).values(lease_expires_at=now+timedelta(seconds=seconds)))
+        await db.commit()
+        return result.rowcount == 1
+
+    @staticmethod
+    async def defer_job(db: AsyncSession, job_id: uuid.UUID, stage: str, seconds: int, message: str) -> None:
+        job = await db.get(BackgroundJob, job_id)
+        if not job:
+            return
+        job.status="retrying"
+        job.current_stage=stage
+        job.next_retry_at=datetime.now(timezone.utc)+timedelta(seconds=seconds)
+        job.lease_owner=None
+        job.lease_expires_at=None
+        job.attempt_count=max(0,job.attempt_count-1)
+        job.safe_error_summary=message
+        db.add(BackgroundJobEvent(job_id=job.id,event_type="progress_updated",stage_name=stage,message_safe=message))
+        await db.commit()
 
     @staticmethod
     async def enqueue_job(
@@ -100,6 +146,7 @@ class JobService:
         job.attempt_count += 1
         job.lease_owner = worker_id
         job.lease_expires_at = now + timedelta(seconds=lease_duration_seconds)
+        job.next_retry_at = None
         if not job.started_at:
             job.started_at = now
         job.updated_at = now
@@ -134,6 +181,8 @@ class JobService:
                 BackgroundJob.lease_expires_at < now,
             )
         )
+        if db.bind and db.bind.dialect.name != "sqlite":
+            stmt = stmt.with_for_update(skip_locked=True)
         res = await db.execute(stmt)
         expired_jobs = res.scalars().all()
         recovered_count = 0
@@ -162,6 +211,9 @@ class JobService:
                 job.error_code = "LEASE_TIMEOUT_EXHAUSTED"
                 job.safe_error_summary = "Worker lease expired and max retry attempts were exceeded."
                 job.completed_at = now
+                job.next_retry_at = None
+                job.lease_owner = None
+                job.lease_expires_at = None
                 job.updated_at = now
 
                 db.add(
@@ -229,6 +281,9 @@ class JobService:
         job.current_stage = "completed"
         job.completed_at = now
         job.result_reference_json = result_reference_json or {}
+        job.next_retry_at = None
+        job.error_code = None
+        job.safe_error_summary = None
         job.lease_owner = None
         job.lease_expires_at = None
         job.updated_at = now
@@ -273,6 +328,7 @@ class JobService:
         else:
             job.status = "failed"
             job.completed_at = now
+            job.next_retry_at = None
             job.lease_owner = None
             job.lease_expires_at = None
 

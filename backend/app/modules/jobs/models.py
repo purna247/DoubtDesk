@@ -15,6 +15,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class BackgroundJob(Base):
     """
     Durable PostgreSQL-backed queue record.

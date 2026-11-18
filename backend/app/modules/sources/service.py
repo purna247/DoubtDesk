@@ -229,6 +229,10 @@ class SourceService:
             await JobService.fail_job(db, job_id, "DOC_NOT_FOUND", "Source document record not found.", retry=False)
             raise AppException(code="DOCUMENT_NOT_FOUND", message="Source document record not found.", status_code=404)
 
+        if (job.input_reference_json or {}).get("academic_only") and doc.status != "processed":
+            await JobService.fail_job(db,job_id,"SOURCE_NOT_EXTRACTED","Academic-only recovery requires saved processed source chunks; raw extraction was not restarted.",retry=False)
+            return ExtractionResult("DoubtDesk-Resume","1.0","failed",[],[],[],doc.sha256_checksum)
+
         # A provider-quota deferral happens after deterministic extraction has committed.
         # Resume only the academic stage so source chunks/assets are never duplicated.
         if doc.status == "processed":
@@ -239,14 +243,14 @@ class SourceService:
             current_job = await db.get(BackgroundJob, job_id)
             if current_job:
                 diagnostics = dict(current_job.checkpoint_json or {})
-                diagnostics["academic_extraction"] = {"has_warnings":bool(academic_summary.get("has_warnings")),"warnings_count":int(academic_summary.get("warnings_count",0)),"runs":academic_summary.get("runs",[]),"skipped":bool(academic_summary.get("skipped"))}
+                diagnostics["academic_extraction"] = academic_summary
                 current_job.checkpoint_json=diagnostics
                 await db.commit()
             payload={"academic_extraction":academic_summary,"resumed_from_persisted_source_chunks":True}
-            if academic_summary.get("skipped") or academic_summary.get("usable_batches",0)>0:
+            if academic_summary.get("complete") or (academic_summary.get("skipped") and academic_summary.get("waiting_for") in {None,"syllabus","question_paper"}):
                 await JobService.complete_job(db,job_id,result_reference_json=payload)
             else:
-                await JobService.fail_job(db,job_id,"ACADEMIC_EXTRACTION_FAILED","No academic extraction batches passed validation. Review the extraction diagnostics and retry.",retry=bool(academic_summary.get("retryable")))
+                await JobService.fail_job(db,job_id,"ACADEMIC_EXTRACTION_FAILED",academic_summary.get("safe_error_summary") or "Academic preparation is incomplete. Saved source chunks and validated batches are retained.",retry=bool(academic_summary.get("retryable")))
             return ExtractionResult("DoubtDesk-Resume","1.0","succeeded",[],[],[],doc.sha256_checksum)
 
         # Update stage
@@ -381,15 +385,12 @@ class SourceService:
             invalidate_course_rag_cache()
             await JobService.update_progress(db, job_id, "academic_analysis", 92.0, "Analyzing validated syllabus and examination content.")
             academic_summary = await process_academic_document(db, doc, job_id)
+            if academic_summary.get("deferred"):
+                return result
             current_job = await db.get(BackgroundJob, job_id)
             if current_job:
                 diagnostics = dict(current_job.checkpoint_json or {})
-                diagnostics["academic_extraction"] = {
-                    "has_warnings": bool(academic_summary.get("has_warnings")),
-                    "warnings_count": int(academic_summary.get("warnings_count", 0)),
-                    "runs": academic_summary.get("runs", []),
-                    "skipped": bool(academic_summary.get("skipped")),
-                }
+                diagnostics["academic_extraction"] = academic_summary
                 current_job.checkpoint_json = diagnostics
                 await db.commit()
             result_payload = {
@@ -400,12 +401,12 @@ class SourceService:
                     "status": result.status,
                     "academic_extraction": academic_summary,
                 }
-            if academic_summary.get("skipped") or academic_summary.get("usable_batches", 0) > 0:
+            if academic_summary.get("complete") or (academic_summary.get("skipped") and academic_summary.get("waiting_for") in {None,"syllabus","question_paper"}):
                 await JobService.complete_job(db, job_id, result_reference_json=result_payload)
             else:
                 await JobService.fail_job(
                     db, job_id, error_code="ACADEMIC_EXTRACTION_FAILED",
-                    safe_error_summary="No academic extraction batches passed validation. Review the extraction diagnostics and retry.",
+                    safe_error_summary=academic_summary.get("safe_error_summary") or "Academic preparation is incomplete. Saved source chunks and validated batches are retained.",
                     retry=bool(academic_summary.get("retryable")),
                 )
         else:

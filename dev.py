@@ -17,6 +17,7 @@ import sys
 import socket
 import argparse
 import subprocess
+import time
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -185,7 +186,14 @@ def run_all():
 
         frontend_proc = subprocess.Popen([npm_bin, "run", "dev"], cwd=str(FRONTEND_DIR))
 
-        backend_proc.wait()
+        # All services are required. A live API must not hide a dead worker.
+        while True:
+            for name, proc in (("backend", backend_proc), ("worker", worker_proc), ("frontend", frontend_proc)):
+                code = proc.poll()
+                if code is not None:
+                    print(f"[ERROR] {name} exited with code {code}; stopping the full stack.")
+                    raise SystemExit(code if code != 0 else 1)
+            time.sleep(1)
     except KeyboardInterrupt:
         print("\n[*] Shutting down servers...")
     finally:

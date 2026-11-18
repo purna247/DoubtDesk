@@ -103,10 +103,16 @@ class QuotaExhausted(RuntimeError):
     pass
 
 
+class CheckpointMismatch(ValueError):
+    pass
+
+
 class GeminiProviderError(RuntimeError):
-    def __init__(self, message: str, status_code: int | None = None):
+    def __init__(self, message: str, status_code: int | None = None, *, attempts: list[dict] | None = None, retryable: bool | None = None):
         super().__init__(message)
         self.status_code = status_code
+        self.attempts = attempts or []
+        self.retryable = retryable if retryable is not None else status_code is None or status_code in {408, 429, 500, 502, 503, 504}
 
 
 def normalize_text(value:str)->str:
@@ -169,7 +175,7 @@ async def _reserve_model(db:AsyncSession, model:str, input_tokens:int, output_bu
 
 async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->tuple[dict[str,Any],int,int,str]:
     settings=get_settings()
-    if not settings.GEMINI_API_KEY:raise RuntimeError("Gemini API key is not configured.")
+    if not settings.GEMINI_API_KEY:raise GeminiProviderError("Gemini API key is not configured.", retryable=False)
     estimate=max(1,len(prompt)//4)
     if estimate>MAX_INPUT_TOKENS:raise ValueError("Course extraction exceeds safe single-request size; teacher review is required.")
     configured_models=[settings.GEMINI_MODEL,*[m.strip() for m in settings.GEMINI_FALLBACK_MODELS.split(",") if m.strip()],settings.GEMINI_REPAIR_MODEL]
@@ -178,7 +184,7 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
     if not repair:
         healthy=[m for m in models if _MODEL_COOLDOWN_UNTIL.get(m,0)<=now_mono]
         if healthy:models=healthy
-    exhausted=[]; last_error=None
+    exhausted=[]; last_error=None; attempts=[]
     for model in models:
         stage_budget={"analysis":24000,"syllabus":16000,"questions":24000,"grouping":12000,"repair":16000}.get(stage,12000)
         output_budget=min(settings.GEMINI_MAX_OUTPUT_TOKENS,stage_budget)
@@ -188,6 +194,7 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
             exhausted.append(model);continue
         url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         payload={"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.1,"maxOutputTokens":output_budget,"responseMimeType":"application/json","responseSchema":_json_schema(stage)}}
+        started=time.monotonic()
         try:
             response = await gemini_gateway._execute_with_backoff(
                 limiter=gemini_gateway.flash_limiter,
@@ -196,6 +203,7 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
                 estimated_tokens=estimate + output_budget,
                 priority=Priority.LOW,
                 timeout=180.0,
+                max_retries=1,
             )
             data=response.json()
             parts=data["candidates"][0]["content"]["parts"]
@@ -206,25 +214,30 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
             return body,int(usage.get("promptTokenCount",estimate)),int(usage.get("candidatesTokenCount",0)),model
         except (httpx.HTTPError,KeyError,IndexError,ValueError,json.JSONDecodeError,RuntimeError) as exc:
             last_error=exc
+            detail={"model":model,"stage":stage,"error_type":type(exc).__name__,"elapsed_seconds":round(time.monotonic()-started,2)}
             if isinstance(exc,httpx.HTTPStatusError):
                 status=exc.response.status_code
+                detail["http_status"]=status
+                try:
+                    provider_status=exc.response.json().get("error",{}).get("status","")
+                    if re.fullmatch(r"[A-Z_]{1,80}",provider_status):detail["provider_status"]=provider_status
+                except (ValueError,AttributeError,TypeError):pass
+                request_id=exc.response.headers.get("x-request-id","")
+                if re.fullmatch(r"[a-zA-Z0-9_-]{1,128}",request_id):detail["request_id"]=request_id
                 logger.warning("Gemini request failed model=%s status=%s stage=%s",model,status,stage)
                 if status==404:_MODEL_COOLDOWN_UNTIL[model]=time.monotonic()+1800
                 elif status==503:_MODEL_COOLDOWN_UNTIL[model]=time.monotonic()+300
             else:
                 logger.warning("Gemini request failed model=%s error=%s stage=%s",model,type(exc).__name__,stage)
                 if isinstance(exc,httpx.TimeoutException):_MODEL_COOLDOWN_UNTIL[model]=time.monotonic()+300
+            attempts.append(detail)
             if repair:break
     if len(exhausted)==len(models):raise QuotaExhausted("All configured Gemini daily request quotas are exhausted.")
-    if isinstance(last_error, httpx.HTTPStatusError):
-        status_code=last_error.response.status_code
-        if status_code==503:
-            raise GeminiProviderError("Gemini is temporarily unavailable (HTTP 503) across the configured models. Retry after service capacity recovers.",status_code)
-        raise GeminiProviderError(f"Gemini API requests failed with HTTP {status_code} across the configured models. Check model access and API configuration.",status_code)
-    if isinstance(last_error, httpx.TimeoutException):
-        raise GeminiProviderError("Gemini requests timed out across the configured models. Retry the roadmap generation.")
-    if isinstance(last_error, httpx.HTTPError):
-        raise GeminiProviderError("The worker could not reach the Gemini API across the configured models. Check the network and retry.")
+    if any(isinstance(last_error,t) for t in (httpx.HTTPError,RuntimeError)):
+        statuses=[a.get("http_status") for a in attempts]
+        retryable=any(s in {408,429,500,502,503,504} or s is None for s in statuses)
+        outcomes=", ".join(f"{a['model']}: HTTP {a['http_status']}" if a.get('http_status') else f"{a['model']}: {a['error_type']}" for a in attempts)
+        raise GeminiProviderError(f"Gemini {stage} request failed ({outcomes}). Saved extraction checkpoints are retained.",getattr(getattr(last_error,"response",None),"status_code",None),attempts=attempts,retryable=retryable)
     if isinstance(last_error, (json.JSONDecodeError, KeyError, IndexError)):
         raise last_error
     raise RuntimeError(f"Gemini structured request failed ({type(last_error).__name__ if last_error else 'unknown'}).")
@@ -373,10 +386,24 @@ async def _repair_invalid_items(db:AsyncSession,run:AcademicExtractionRun,chunks
 
 
 async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,job_id:uuid.UUID)->dict[str,Any]:
+    from contextlib import AsyncExitStack
+    from app.modules.jobs.execution import course_execution_lock
+    offerings=(await db.execute(select(SourceDocumentCourseOffering.course_offering_id).where(SourceDocumentCourseOffering.source_document_id==trigger_doc.id))).scalars().all()
+    async with AsyncExitStack() as stack:
+        for offering_id in sorted(set(offerings),key=str):
+            acquired=await stack.enter_async_context(course_execution_lock(db,offering_id))
+            if not acquired:
+                from app.modules.jobs.service import JobService
+                await JobService.defer_job(db,job_id,"waiting_for_course_build",30,"Another worker is preparing this course; saved progress will be reused.")
+                return {"deferred":True,"complete":False}
+        return await _process_academic_document(db,trigger_doc,job_id)
+
+
+async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,job_id:uuid.UUID)->dict[str,Any]:
     """Run syllabus structure extraction, batched question extraction, then one dynamic grouping call per module."""
     settings=get_settings()
     offering_ids=(await db.execute(select(SourceDocumentCourseOffering.course_offering_id).where(SourceDocumentCourseOffering.source_document_id==trigger_doc.id))).scalars().all()
-    out={"runs":[],"warnings_count":0,"has_warnings":False,"usable_batches":0,"skipped":False,"deferred":False}
+    out={"runs":[],"warnings_count":0,"has_warnings":False,"usable_batches":0,"validated_batches":0,"complete":True,"skipped":False,"deferred":False}
     if trigger_doc.source_type not in {"syllabus","question_paper"} or not offering_ids:
         out["skipped"]=True;return out
     for offering_id in offering_ids:
@@ -385,6 +412,8 @@ async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,j
         if not syllabus_docs or not question_docs:
             out["skipped"]=True
             out["waiting_for"]="syllabus" if not syllabus_docs else "question_paper"
+            out["complete"]=False
+            out["safe_error_summary"]=f"Material is available. Academic preparation is waiting for a processed {out['waiting_for'].replace('_',' ')}."
             continue
         all_rows=[];checksum_material=[]
         for source in docs:
@@ -411,23 +440,28 @@ async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,j
             version=CourseContentVersion(institution_id=trigger_doc.institution_id,course_offering_id=offering_id,version_number=maximum+1,status="draft",created_by_user_id=teacher_id);db.add(version);await db.flush()
         if not settings.GEMINI_API_KEY:
             run.status="failed";run.has_warnings=True;run.warnings_count=1;run.safe_error_summary="Gemini API key is not configured; academic proposals were not generated."
-            db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis",batch_index=0,status="flagged_for_review",source_chunk_ids=[str(c.id) for _,c in all_rows],warning_code="AI_NOT_CONFIGURED",warning_message=run.safe_error_summary,attempts=0));out["warnings_count"]+=1;out["has_warnings"]=True;out["skipped"]=True;out["waiting_for"]="AI_NOT_CONFIGURED";out["runs"].append({"run_id":str(run.id),"cached":False,"warnings_count":1,"has_warnings":True});await db.commit();continue
+            out["complete"]=False;out["retryable"]=False;out["safe_error_summary"]=run.safe_error_summary
+            out["runs"].append({"run_id":str(run.id),"status":"failed","safe_error_summary":run.safe_error_summary})
+            await db.commit();continue
         chunks_by_id={str(c.id):c for _,c in all_rows}
         syllabus_rows=[(d,c) for d,c in all_rows if d.source_type=="syllabus"]
         question_rows=[(d,c) for d,c in all_rows if d.source_type=="question_paper"]
         stale_failed=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage.in_(["analysis","analysis_syllabus","analysis_questions","repair"]),AcademicExtractionBatch.warning_code.in_(["ANALYSIS_FAILED","ANALYSIS_RESPONSE_INVALID","GEMINI_PROVIDER_UNAVAILABLE","GEMINI_PROVIDER_REQUEST_FAILED","ITEMS_NEED_REVIEW"])))).scalars().all()
         for batch in stale_failed:
+            if batch.status=="validated":continue
             await db.delete(batch)
         if stale_failed:await db.flush()
 
         validated_modules:list[dict[str,Any]]=[];validated_questions:list[dict[str,Any]]=[]
         legacy_analysis=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="analysis",AcademicExtractionBatch.batch_index==0))).scalars().first()
-        if legacy_analysis and legacy_analysis.response_json:
+        if legacy_analysis and legacy_analysis.status=="validated" and legacy_analysis.response_json:
             validated_modules=legacy_analysis.response_json.get("modules",[]);validated_questions=legacy_analysis.response_json.get("questions",[])
         else:
             try:
                 syllabus_batch=(await db.execute(select(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="analysis_syllabus",AcademicExtractionBatch.batch_index==0,AcademicExtractionBatch.status=="validated"))).scalars().first()
-                if syllabus_batch and syllabus_batch.response_json:
+                if syllabus_batch and syllabus_batch.source_chunk_ids!=[str(c.id) for _,c in syllabus_rows]:
+                    raise CheckpointMismatch("Saved syllabus checkpoint does not match the current source chunk IDs. Existing validated output was retained; investigate input provenance before retrying.")
+                if syllabus_batch and syllabus_batch.source_chunk_ids==[str(c.id) for _,c in syllabus_rows] and syllabus_batch.response_json:
                     validated_modules=syllabus_batch.response_json.get("modules",[])
                 else:
                     raw_syl,in_tokens,out_tokens,actual_model=await _gemini_json(db,_analysis_syllabus_prompt(syllabus_rows),"syllabus")
@@ -456,7 +490,9 @@ async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,j
                 for b_idx,start in enumerate(range(0,len(question_rows),QUESTION_BATCH_SIZE)):
                     q_slice=question_rows[start:start+QUESTION_BATCH_SIZE]
                     cached_batch=existing_q_batches.get(b_idx)
-                    if cached_batch and cached_batch.response_json is not None:
+                    if cached_batch and cached_batch.source_chunk_ids!=[str(c.id) for _,c in q_slice]:
+                        raise CheckpointMismatch("Saved question checkpoint does not match the current source chunk IDs. Existing validated output was retained; investigate input provenance before retrying.")
+                    if cached_batch and cached_batch.source_chunk_ids==[str(c.id) for _,c in q_slice] and cached_batch.response_json is not None:
                         validated_questions.extend(cached_batch.response_json.get("questions",[]))
                         continue
                     headers=_preceding_section_headers(question_rows,start)
@@ -488,14 +524,22 @@ async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,j
                 if isinstance(exc,GeminiProviderError):
                     run.safe_error_summary=str(exc)
                     warning_code="GEMINI_PROVIDER_UNAVAILABLE" if exc.status_code==503 or exc.status_code is None else "GEMINI_PROVIDER_REQUEST_FAILED"
+                elif isinstance(exc,CheckpointMismatch):
+                    run.safe_error_summary=str(exc)
+                    warning_code="CHECKPOINT_SOURCE_MISMATCH"
                 elif isinstance(exc,(ValidationError,json.JSONDecodeError,KeyError,IndexError)):
                     run.safe_error_summary="Gemini returned a response that did not match the required academic schema. No unvalidated content was stored."
                     warning_code="ANALYSIS_RESPONSE_INVALID"
                 else:
                     run.safe_error_summary="Course analysis could not be completed. Check the worker log for the failure category, then retry."
                     warning_code="ANALYSIS_FAILED"
-                db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis",batch_index=0,status="flagged_for_review",source_chunk_ids=[str(c.id) for _,c in all_rows],response_json={"error_category":warning_code},warning_code=warning_code,warning_message=run.safe_error_summary,attempts=1))
-                out["warnings_count"]+=1;out["has_warnings"]=True;out["retryable"]=isinstance(exc,RuntimeError);logger.warning("Course analysis failed run=%s error=%s",run.id,type(exc).__name__);await db.commit();continue
+                db.add(AcademicExtractionBatch(run_id=run.id,stage="analysis",batch_index=0,status="flagged_for_review",source_chunk_ids=[str(c.id) for _,c in all_rows],response_json={"error_category":warning_code,"provider_attempts":getattr(exc,"attempts",[])},warning_code=warning_code,warning_message=run.safe_error_summary,attempts=1))
+                await db.flush()
+                retained=await db.scalar(select(func.count()).select_from(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.status=="validated")) or 0
+                out["validated_batches"]+=retained;out["complete"]=False
+                out["safe_error_summary"]=f"{run.safe_error_summary} {retained} validated batches retained."
+                out["runs"].append({"run_id":str(run.id),"status":"failed","validated_batches":retained,"safe_error_summary":run.safe_error_summary,"provider_attempts":getattr(exc,"attempts",[])})
+                out["warnings_count"]+=1;out["has_warnings"]=True;out["retryable"]=out.get("retryable",True) and bool(getattr(exc,"retryable",False));logger.warning("Course analysis failed run=%s error=%s",run.id,type(exc).__name__);await db.commit();continue
         validated_modules=_dedupe_modules(validated_modules);validated_questions=_dedupe_questions(validated_questions)
         low_confidence_details=[]
         for m in validated_modules:
@@ -522,15 +566,27 @@ async def process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,j
             if grouping_count:out["usable_batches"]+=grouping_count
         except QuotaExhausted:
             run.status="running";await db.commit();await _defer_job_until_quota(db,job_id);out["deferred"]=True;return out
+        except (GeminiProviderError,ValidationError,ValueError,KeyError,IndexError) as exc:
+            run.safe_error_summary=str(exc) if isinstance(exc,GeminiProviderError) else "Module grouping returned an invalid academic schema. Validated earlier stages are retained."
+            out["retryable"]=bool(getattr(exc,"retryable",False))
+            out["provider_attempts"]=getattr(exc,"attempts",[])
         generated_node_count=await db.scalar(select(func.count()).select_from(LearningNode).where(LearningNode.course_content_version_id==version.id,LearningNode.node_code.like(f"AI-{run.id.hex[:8]}-%"))) or 0
-        run.status="succeeded" if generated_node_count>0 else "failed"
+        required_groupings=sum(any(c.get("confidence",0)>=CONFIDENCE_THRESHOLD for t in m.get("topics",[]) for c in t.get("concepts",[])) for m in validated_modules)
+        completed_groupings=await db.scalar(select(func.count()).select_from(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="grouping",AcademicExtractionBatch.status=="validated")) or 0
+        run.status="succeeded" if generated_node_count>0 and required_groupings>0 and completed_groupings==required_groupings and not run.safe_error_summary else "failed"
+        if run.status!="succeeded":
+            out["complete"]=False
+            if not run.safe_error_summary:run.safe_error_summary="Academic content is retained, but required module roadmap preparation is incomplete."
+            out["safe_error_summary"]=run.safe_error_summary
         if generated_node_count==0 and not run.safe_error_summary:
             run.safe_error_summary="The course content was extracted, but no validated learning roadmap nodes could be generated. Review flagged items and retry after correcting the source content."
         run.has_warnings=run.warnings_count>0
         out["warnings_count"]+=run.warnings_count
+        await db.flush()
+        out["validated_batches"]+=await db.scalar(select(func.count()).select_from(AcademicExtractionBatch).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.status=="validated")) or 0
         out["has_warnings"]|=run.has_warnings
         out["usable_batches"]+=1 if validated_modules or validated_questions else 0
-        out["runs"].append({"run_id":str(run.id),"cached":False,"warnings_count":run.warnings_count,"has_warnings":run.has_warnings})
+        out["runs"].append({"run_id":str(run.id),"status":run.status,"cached":False,"warnings_count":run.warnings_count,"has_warnings":run.has_warnings,"completed_groupings":completed_groupings,"required_groupings":required_groupings})
         await db.commit()
     return out
 
@@ -622,9 +678,17 @@ async def _persist_questions(db,doc,run,offering_id,teacher_id,questions,concept
         source_chunk_id=uuid.UUID(q["source_question_id"].partition("#")[0].removeprefix("q:"))
         source=chunks_by_id.get(str(source_chunk_id))
         if not source:continue
-        stable_question_id=uuid.uuid5(doc.id,q["source_question_id"])
+        # Identity belongs to the original question source, not whichever material
+        # happens to trigger a course-level retry.
+        stable_question_id=uuid.uuid5(source.source_document_id,q["source_question_id"])
         existing_question=await db.get(Question,stable_question_id)
         existing_version=(await db.execute(select(QuestionVersion).where(QuestionVersion.question_id==stable_question_id).order_by(QuestionVersion.version_number.desc()).limit(1))).scalars().first() if existing_question else None
+        if not existing_version:
+            existing_version=await db.scalar(select(QuestionVersion).join(QuestionCoverageEvent,QuestionCoverageEvent.question_version_id==QuestionVersion.id).where(
+                QuestionVersion.institution_id==doc.institution_id,
+                QuestionCoverageEvent.course_offering_id==offering_id,
+                QuestionVersion.metadata_json["source_question_id"].as_string()==q["source_question_id"],
+            ).order_by(QuestionVersion.version_number.desc()).limit(1))
         if existing_version:
             existing_question=await db.get(Question,existing_version.question_id)
             coverage_exists=await db.scalar(select(QuestionCoverageEvent.id).where(QuestionCoverageEvent.course_offering_id==offering_id,QuestionCoverageEvent.question_version_id==existing_version.id,QuestionCoverageEvent.event_type=="extracted").limit(1))
@@ -766,7 +830,7 @@ async def _defer_job_until_quota(db:AsyncSession,job_id:uuid.UUID)->None:
     job=await db.get(BackgroundJob,job_id)
     if not job:return
     now=datetime.now(timezone.utc);reset=(now+timedelta(days=1)).replace(hour=0,minute=0,second=5,microsecond=0)
-    job.status="retrying";job.current_stage="waiting_for_provider_quota";job.next_retry_at=reset;job.lease_owner=None;job.lease_expires_at=None;job.safe_error_summary="Gemini daily request quota is exhausted; processing is scheduled to resume after quota reset.";job.updated_at=now
+    job.status="retrying";job.current_stage="waiting_for_provider_quota";job.next_retry_at=reset;job.lease_owner=None;job.lease_expires_at=None;job.safe_error_summary="Gemini daily request quota is exhausted; processing is scheduled to resume after quota reset.";job.updated_at=now;job.attempt_count=max(0,job.attempt_count-1)
     checkpoint=dict(job.checkpoint_json or {});checkpoint["provider_quota"]={"reason":"daily_rpd_exhausted","resume_after":reset.isoformat()};job.checkpoint_json=checkpoint
     db.add(BackgroundJobEvent(job_id=job.id,event_type="progress_updated",stage_name=job.current_stage,progress_percent=job.progress_percent,message_safe=job.safe_error_summary,details_json=checkpoint["provider_quota"]))
     await db.commit()

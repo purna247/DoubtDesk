@@ -1,4 +1,7 @@
 import uuid
+import hashlib
+from datetime import datetime, timezone
+from collections import Counter
 from typing import Optional, List
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, status
@@ -30,10 +33,12 @@ from app.modules.sources.schemas import (
     SourceDocumentReviewRequest,
     TeacherSourceMaterialOut,
     RagSearchResultOut,
+    AcademicRetryResponse,
 )
 from app.modules.sources.service import SourceService
 from app.modules.jobs.service import JobService
 from app.modules.jobs.models import BackgroundJob
+from app.modules.sources.academic_models import AcademicExtractionRun, AcademicExtractionBatch
 from sqlalchemy import and_, select
 
 router = APIRouter(tags=["Source Documents & Processing Jobs"])
@@ -167,6 +172,46 @@ async def list_teacher_course_materials(
     for processing_job in jobs:
         latest_jobs.setdefault(processing_job.target_entity_id, processing_job)
 
+    health = await JobService.worker_health(db)
+    current_sources=[d for d in documents if d.status=="processed" and d.source_type in {"syllabus","question_paper"}]
+    checksum=hashlib.sha256("|".join(sorted(f"{d.id}:{d.sha256_checksum}" for d in current_sources)).encode()).hexdigest()
+    course_run = await db.scalar(select(AcademicExtractionRun).where(
+        AcademicExtractionRun.course_offering_id==course_offering_id,
+        AcademicExtractionRun.institution_id==tenant_id,
+        AcademicExtractionRun.content_checksum==checksum,
+    ).order_by(AcademicExtractionRun.updated_at.desc()).limit(1))
+    batches = (await db.execute(select(AcademicExtractionBatch).where(
+        AcademicExtractionBatch.run_id==course_run.id,
+    ))).scalars().all() if course_run else []
+    academic_ids={d.id for d in documents if d.source_type in {"syllabus","question_paper"}}
+    active_course_job=next((j for j in jobs if j.target_entity_id in academic_ids and j.status in {"queued","running","retrying"}),None)
+    # A course build is shared by its syllabus and question papers. Reconcile both
+    # cards without mutating historical failed jobs belonging to either document.
+    shared_job=active_course_job or next((j for j in jobs if any(
+        r.get("run_id")==str(course_run.id) for r in (
+            (j.result_reference_json or {}).get("academic_extraction",{}).get("runs",[]) or
+            (j.checkpoint_json or {}).get("academic_extraction",{}).get("runs",[])
+        )
+    )),None) if course_run else active_course_job
+    if shared_job:
+        for document in current_sources:
+            latest_jobs[document.id]=shared_job
+    def academic_fields(document):
+        required=document.source_type in {"syllabus","question_paper"}
+        status="not_required"
+        if required:
+            status=active_course_job.status if active_course_job else course_run.status if course_run else "waiting_for_materials"
+        return {
+            "academic_status":status,
+            "academic_summary":{
+                "run_id":str(course_run.id),"validated_batches":sum(b.status=="validated" for b in batches),
+                "completed_question_batches":sum(b.stage=="analysis_questions" and b.status=="validated" for b in batches),
+                "safe_error_summary":course_run.safe_error_summary,"warnings_count":course_run.warnings_count,
+            } if required and course_run else None,
+            "can_retry_academic":required and document.status=="processed" and not active_course_job and bool(course_run and course_run.status=="failed"),
+            "worker_available":health["available"],"worker_last_seen_at":health["last_seen_at"],
+        }
+
     return [TeacherSourceMaterialOut(
         id=str(document.id), institution_id=str(document.institution_id),
         original_filename=document.original_filename, display_filename=document.display_filename,
@@ -180,7 +225,78 @@ async def list_teacher_course_materials(
         job_stage=latest_jobs[document.id].current_stage if document.id in latest_jobs else None,
         job_progress_percent=float(latest_jobs[document.id].progress_percent) if document.id in latest_jobs else None,
         job_error_summary=latest_jobs[document.id].safe_error_summary if document.id in latest_jobs else None,
+        **academic_fields(document),
     ) for document in documents]
+
+
+@router.post("/sources/{document_id}/retry-academic", response_model=AcademicRetryResponse)
+async def retry_academic_preparation(
+    document_id: uuid.UUID,
+    course_offering_id: uuid.UUID,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> AcademicRetryResponse:
+    # Reuse the material-library authorization, including active faculty assignment.
+    materials=await list_teacher_course_materials(course_offering_id,user,db)
+    material=next((m for m in materials if m.id==str(document_id)),None)
+    if not material:
+        raise AppException(code="DOCUMENT_NOT_FOUND",message="Course material not found.",status_code=404)
+    if material.status!="processed" or material.source_type not in {"syllabus","question_paper"}:
+        raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="Only extracted syllabus and question papers can resume academic preparation.",status_code=409)
+    # Serialize retry submissions. enqueue_job commits while this row is locked.
+    await db.execute(select(CourseOffering.id).where(CourseOffering.id==course_offering_id).with_for_update())
+    doc_ids=select(SourceDocumentCourseOffering.source_document_id).where(
+        SourceDocumentCourseOffering.course_offering_id==course_offering_id,
+        SourceDocumentCourseOffering.institution_id==_get_tenant_id(user),
+    )
+    active=await db.scalar(select(BackgroundJob).where(
+        BackgroundJob.job_type=="extract_source_document",
+        BackgroundJob.target_entity_id.in_(doc_ids),
+        BackgroundJob.status.in_(["queued","running","retrying"]),
+    ).order_by(BackgroundJob.created_at.desc()).limit(1))
+    if not active:
+        if not material.can_retry_academic:
+            raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="There is no failed preparation for the current course sources.",status_code=409)
+        # Re-read under the lock: another retry may have completed while waiting.
+        run=await db.scalar(select(AcademicExtractionRun).where(AcademicExtractionRun.course_offering_id==course_offering_id).order_by(AcademicExtractionRun.updated_at.desc()).limit(1))
+        if not run or run.status!="failed":
+            raise AppException(code="ACADEMIC_RETRY_UNAVAILABLE",message="There is no failed academic preparation to retry.",status_code=409)
+        previous=await db.scalar(select(BackgroundJob).where(BackgroundJob.target_entity_id==document_id,BackgroundJob.job_type=="extract_source_document").order_by(BackgroundJob.created_at.desc()).limit(1))
+        active=await JobService.enqueue_job(db,"extract_source_document","source_document",document_id,
+            institution_id=_get_tenant_id(user),requested_by_user_id=uuid.UUID(user.id),scope_course_offering_id=course_offering_id,
+            input_reference_json={"academic_only":True,"previous_job_id":str(previous.id) if previous else None,"previous_run_id":str(run.id)})
+        already_active=False
+    else:
+        already_active=True
+    health=await JobService.worker_health(db)
+    return AcademicRetryResponse(job_id=str(active.id),status=active.status,already_active=already_active,
+        worker_available=health["available"],message="Academic preparation is queued or active. Existing source chunks and compatible validated batches will be reused." if health["available"] else "Academic preparation is queued or active, but no recent worker heartbeat is available. Start the ingestion worker to process queued work.")
+
+
+@router.get("/courses/{course_offering_id}/sources/processing-health")
+async def course_processing_health(
+    course_offering_id: uuid.UUID,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    materials=await list_teacher_course_materials(course_offering_id,user,db)
+    ids=[uuid.UUID(m.id) for m in materials]
+    jobs=(await db.execute(select(BackgroundJob).where(
+        BackgroundJob.institution_id==_get_tenant_id(user),
+        BackgroundJob.job_type=="extract_source_document",
+        BackgroundJob.target_entity_id.in_(ids),
+    ))).scalars().all() if ids else []
+    pending=[j for j in jobs if j.status in {"queued","retrying"}]
+    def utc(value):
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+    oldest=min((utc(j.created_at) for j in pending),default=None)
+    last_success=max((utc(j.completed_at) for j in jobs if j.status=="succeeded" and j.completed_at),default=None)
+    return {"worker":await JobService.worker_health(db),"jobs_by_status":dict(Counter(j.status for j in jobs)),
+        "oldest_pending_age_seconds":max(0,(datetime.now(timezone.utc)-oldest).total_seconds()) if oldest else None,
+        "last_success_at":last_success,
+        "additional_attempts":sum(max(0,j.attempt_count-1) for j in jobs),
+        "failed_jobs_by_error":dict(Counter(j.error_code or "UNKNOWN" for j in jobs if j.status=="failed")),
+        "failed_jobs_by_stage":dict(Counter(j.current_stage for j in jobs if j.status=="failed"))}
 
 @router.post("/sources/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(

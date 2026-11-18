@@ -386,6 +386,8 @@ class GeminiGateway:
                         return resp
 
                     if resp.status_code in {429, 503}:
+                        if attempt == max_retries:
+                            resp.raise_for_status()
                         self.metrics["rate_limit_429s"] += 1
                         self.metrics["retries_performed"] += 1
 
@@ -411,7 +413,8 @@ class GeminiGateway:
                         await asyncio.sleep(backoff)
                         continue
 
-                    # For other non-transient status codes, raise status error
+                    # Preserve the final HTTP status for callers' retry classification.
+                    # The loop above only retries 429/503 while attempts remain.
                     resp.raise_for_status()
                     return resp
 

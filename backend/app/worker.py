@@ -4,6 +4,7 @@ import os
 import signal
 import socket
 import uuid
+from contextlib import suppress
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -13,6 +14,7 @@ from app.database import async_session_factory, engine
 import app.model_registry  # noqa: F401 - register all ORM models before worker queries
 from app.modules.jobs.models import BackgroundJob
 from app.modules.jobs.service import JobService
+from app.modules.jobs.execution import install_job_fence, LeaseLost
 from app.modules.sources.service import SourceService
 
 logging.basicConfig(
@@ -23,6 +25,34 @@ logger = logging.getLogger("doubtdesk.worker")
 settings = get_settings()
 
 _running = True
+
+
+async def maintain_worker_health(session_factory, worker_id):
+    while True:
+        try:
+            async with session_factory() as db:
+                await JobService.heartbeat(db, worker_id)
+        except Exception as exc:
+            logger.error("Worker heartbeat failed with %s.", type(exc).__name__)
+        await asyncio.sleep(10)
+
+
+async def maintain_job_lease(session_factory, job_id, worker_id, owner_task, lost):
+    interval=max(0.1,min(10,settings.WORKER_JOB_LEASE_SECONDS/3))
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with session_factory() as db:
+                if await JobService.renew_lease(db,job_id,worker_id,settings.WORKER_JOB_LEASE_SECONDS):
+                    continue
+                job=await db.get(BackgroundJob,job_id)
+                if job and job.status != "running":
+                    return
+        except Exception as exc:
+            logger.error("Job lease renewal failed with %s.",type(exc).__name__)
+        lost.set()
+        owner_task.cancel()
+        return
 def handle_shutdown_signal(signum: int, _frame: Any) -> None:
     global _running
     logger.info("Received termination signal (%s); stopping after the current job.", signum)
@@ -49,6 +79,9 @@ async def process_next_job(
         job_id = job.id
         job_type = job.job_type
         logger.info("Claimed background job %s (%s).", job_id, job_type)
+        remove_fence=install_job_fence(db,job_id,worker_id)
+        lost=asyncio.Event()
+        lease_task=asyncio.create_task(maintain_job_lease(session_factory,job_id,worker_id,asyncio.current_task(),lost))
 
         try:
             if job_type == "extract_source_document":
@@ -70,6 +103,14 @@ async def process_next_job(
                     retry=False,
                 )
                 logger.error("Job %s has unsupported type %s.", job_id, job_type)
+        except asyncio.CancelledError:
+            await db.rollback()
+            if not lost.is_set():
+                raise
+            logger.error("Stopped job %s after losing its lease.",job_id)
+        except LeaseLost:
+            await db.rollback()
+            logger.error("Discarded stale worker output for job %s.",job_id)
         except Exception as exc:
             # Do not log driver/parser exception text; it can contain secrets or uploaded data.
             await db.rollback()
@@ -87,6 +128,11 @@ async def process_next_job(
                 job_id,
                 type(exc).__name__,
             )
+        finally:
+            lease_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await lease_task
+            remove_fence()
 
         return True
 
@@ -102,6 +148,7 @@ async def run_worker() -> None:
         settings.WORKER_JOB_LEASE_SECONDS,
     )
 
+    health_task=asyncio.create_task(maintain_worker_health(async_session_factory,worker_id))
     try:
         while _running:
             try:
@@ -115,6 +162,9 @@ async def run_worker() -> None:
                 if _running:
                     await asyncio.sleep(max(settings.WORKER_POLL_INTERVAL_SECONDS, 1.0))
     finally:
+        health_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await health_task
         logger.info("Cleaning up worker database connections.")
         await engine.dispose()
         logger.info("Background worker stopped.")

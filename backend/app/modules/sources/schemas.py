@@ -72,6 +72,19 @@ class TeacherSourceMaterialOut(SourceDocumentOut):
     job_stage: Optional[str] = None
     job_progress_percent: Optional[float] = None
     job_error_summary: Optional[str] = None
+    academic_status: str = "not_required"
+    academic_summary: Optional[Dict[str, Any]] = None
+    can_retry_academic: bool = False
+    worker_available: bool = False
+    worker_last_seen_at: Optional[datetime] = None
+
+
+class AcademicRetryResponse(BaseModel):
+    job_id: str
+    status: str
+    already_active: bool
+    worker_available: bool
+    message: str
 
 
 class DocumentUploadResponse(BaseModel):
