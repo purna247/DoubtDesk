@@ -141,7 +141,7 @@ async def process_next_job(
         return True
 
 
-async def run_worker(job_id: uuid.UUID | None = None) -> None:
+async def run_worker(job_id: uuid.UUID | None = None) -> int:
     """Continuously poll and execute durable jobs until a shutdown signal arrives."""
     global _running
     worker_id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -160,7 +160,10 @@ async def run_worker(job_id: uuid.UUID | None = None) -> None:
                 if job_id is not None:
                     if not processed:
                         logger.warning("Requested job %s is not currently claimable; no other job was processed.",job_id)
-                    return
+                        return 1
+                    async with async_session_factory() as db:
+                        finished=await db.get(BackgroundJob,job_id)
+                        return 0 if finished and finished.status=="succeeded" else 1
                 if not processed and _running:
                     await asyncio.sleep(settings.WORKER_POLL_INTERVAL_SECONDS)
             except asyncio.CancelledError:
@@ -168,7 +171,7 @@ async def run_worker(job_id: uuid.UUID | None = None) -> None:
             except Exception as exc:
                 logger.error("Worker poll failed with %s; retrying.", type(exc).__name__)
                 if job_id is not None:
-                    raise
+                    return 1
                 if _running:
                     await asyncio.sleep(max(settings.WORKER_POLL_INTERVAL_SECONDS, 1.0))
     finally:
@@ -186,6 +189,7 @@ async def run_worker(job_id: uuid.UUID | None = None) -> None:
         logger.info("Cleaning up worker database connections.")
         await engine.dispose()
         logger.info("Background worker stopped.")
+    return 0
 
 
 def main() -> None:
@@ -195,7 +199,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
     try:
-        asyncio.run(run_worker(job_id=args.job_id))
+        raise SystemExit(asyncio.run(run_worker(job_id=args.job_id)))
     except KeyboardInterrupt:
         pass
 

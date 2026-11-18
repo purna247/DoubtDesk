@@ -208,6 +208,8 @@ async def list_teacher_course_materials(
             "academic_summary":{
                 "run_id":str(course_run.id),"validated_batches":sum(b.status=="validated" for b in batches),
                 "completed_question_batches":sum(b.stage=="analysis_questions" and b.status=="validated" for b in batches),
+                "validated_question_items":sum(len((b.response_json or {}).get("questions",[])) for b in batches if b.stage=="analysis_questions" and b.status=="validated"),
+                "review_question_items":sum(len((b.response_json or {}).get("questions",[])) for b in batches if b.stage=="repair" and b.status=="flagged_for_review"),
                 "safe_error_summary":course_run.safe_error_summary or ("Academic preparation was interrupted and has no active job. Saved checkpoints can be resumed." if status=="failed" and course_run.status=="running" else None),"warnings_count":course_run.warnings_count,
             } if required and course_run else None,
             "can_retry_academic":required and document.status=="processed" and not active_course_job and bool(course_run and status=="failed"),
