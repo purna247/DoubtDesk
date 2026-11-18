@@ -161,7 +161,7 @@ def run_all():
     print("  🌟 Starting DoubtDesk Full Stack (Backend + Worker + Frontend)")
     print("  Frontend: http://localhost:3000")
     print("  Backend:  http://localhost:8000")
-    print("  Worker:   Active (processing queued uploads & extractions)")
+    print("  Worker:   Starting (background uploads & extractions)")
     print("  Press Ctrl+C at any time to stop all services.")
     print("=" * 60 + "\n")
 

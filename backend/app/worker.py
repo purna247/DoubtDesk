@@ -90,8 +90,9 @@ async def process_next_job(
             if job_type == "extract_source_document":
                 result = await SourceService.process_extraction_job(db, job_id)
                 logger.info(
-                    "Completed extraction job %s: outcome=%s chunks=%s assets=%s warnings=%s.",
+                    "Extraction handler returned for job %s: job_status=%s source_outcome=%s chunks=%s assets=%s warnings=%s.",
                     job_id,
+                    job.status,
                     result.status,
                     len(result.chunks),
                     len(result.assets),

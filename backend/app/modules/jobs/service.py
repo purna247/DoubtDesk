@@ -150,6 +150,8 @@ class JobService:
         job.lease_owner = worker_id
         job.lease_expires_at = now + timedelta(seconds=lease_duration_seconds)
         job.next_retry_at = None
+        job.error_code = None
+        job.safe_error_summary = None
         if not job.started_at:
             job.started_at = now
         job.updated_at = now

@@ -263,6 +263,7 @@ export const TeacherMaterialsPage: React.FC<{ embedded?: boolean }> = ({ embedde
                         <span>{material.source_type.replace(/_/g, ' ')}</span>
                         {material.academic_status !== 'not_required' && <span className={academicFailed ? 'text-rose-700' : ''}>Academic preparation: {(material.academic_status || 'unknown').replace(/_/g, ' ')}</span>}
                         {material.academic_summary && <span>{material.academic_summary.validated_batches} validated batches retained</span>}
+                        {!!material.academic_summary?.warnings_count && <span className="text-amber-800">{material.academic_summary.warnings_count} extraction warning{material.academic_summary.warnings_count === 1 ? '' : 's'}</span>}
                         {material.job_stage && <span>Last stage: {material.job_stage.replace(/_/g, ' ')}</span>}
                         {material.job_progress_percent != null && <span>{Math.round(material.job_progress_percent)}%{material.job_status === 'failed' ? ' before failure' : ''}</span>}
                       </div>
