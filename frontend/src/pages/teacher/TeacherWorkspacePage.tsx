@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { HelpCircle } from 'lucide-react';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { DesktopSidebar } from '../../components/layout/DesktopSidebar';
 import { RightSidebar } from '../../components/sidebar/RightSidebar';
@@ -341,19 +342,38 @@ export const TeacherWorkspacePage: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-12 text-center my-6">
-                <p className="text-sm font-semibold text-[#111111]">No doubts found for this filter</p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFilterMode('all');
-                    setSelectedSubject('all');
-                    setSearchQuery('');
-                  }}
-                  className="mt-3 btn-outline text-xs px-5 py-2 cursor-pointer"
-                >
-                  Reset Filters
-                </button>
+              <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 sm:p-14 text-center my-6">
+                <div className="w-14 h-14 rounded-full bg-[#F4F7F9] flex items-center justify-center text-[#71808C] mx-auto mb-4 shadow-xs">
+                  <HelpCircle className="w-7 h-7 text-[#71808C]" />
+                </div>
+                <h2 className="text-lg font-bold text-[#111111] mb-5">
+                  {filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()
+                    ? 'No Doubts Found For This Filter'
+                    : 'No Doubts Posted Yet'}
+                </h2>
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#F4F7F9] text-xs font-semibold text-[#4D5963]">
+                  <HelpCircle className="w-4 h-4 text-[#0A8FF5]" />
+                  <span>
+                    {filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()
+                      ? 'Try clearing active filters or adjusting your search'
+                      : 'Academic questions asked by students will appear here'}
+                  </span>
+                </div>
+                {(filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()) && (
+                  <div className="mt-5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterMode('all');
+                        setSelectedSubject('all');
+                        setSearchQuery('');
+                      }}
+                      className="btn-outline text-xs px-5 py-2 rounded-full cursor-pointer"
+                    >
+                      Reset Filters
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </>
