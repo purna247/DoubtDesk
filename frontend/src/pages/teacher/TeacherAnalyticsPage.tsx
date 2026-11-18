@@ -177,39 +177,28 @@ export const TeacherAnalyticsPage: React.FC<{
     }
   };
 
-  const offering = offerings.find((item) => item.id === offeringId);
-
   return (
     <section className="space-y-6">
       {/* Header filter & controls bar */}
-      <header className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#E8EFF3]">
-        <div>
-          {offering && (
-            <p className="text-xs font-semibold text-slate-700">
-              {offering.subject_name || offering.official_subject_code} · Section {offering.section_code} · {offering.term_code || 'Current term'}
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <select
-            value={offeringId}
-            onChange={(event) => setOfferingId(event.target.value)}
-            className="rounded-xl border border-[#DCE7EE] bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-          >
-            {offerings.map((item) => (
-              <option key={item.id} value={item.id}>
-                {[item.official_subject_code, item.subject_name, item.section_code].filter(Boolean).join(' · ')}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => void runAnalytics()}
-            disabled={!offeringId || loading}
-            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition disabled:opacity-50 cursor-pointer"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Recompute
-          </button>
-        </div>
+      <header className="flex items-center justify-end gap-2">
+        <select
+          value={offeringId}
+          onChange={(event) => setOfferingId(event.target.value)}
+          className="rounded-xl border border-[#DCE7EE] bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
+        >
+          {offerings.map((item) => (
+            <option key={item.id} value={item.id}>
+              {[item.official_subject_code, item.subject_name, item.section_code].filter(Boolean).join(' · ')}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => void runAnalytics()}
+          disabled={!offeringId || loading}
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition disabled:opacity-50 cursor-pointer"
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Recompute
+        </button>
       </header>
 
       {message && (

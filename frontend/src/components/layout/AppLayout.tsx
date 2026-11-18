@@ -44,13 +44,23 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   const hasLeft = Boolean(leftSidebar);
   const hasRight = Boolean(rightSidebar) && !fullWidthMain;
 
+  const isAnalytics = activeTab === 'teacher_analytics' || activeTab === 'analytics';
+
   let gridCols = 'grid-cols-1';
+  let gridGap = 'gap-4 lg:gap-5 xl:gap-7';
+
   if (hasLeft && hasRight) {
     gridCols =
       'grid-cols-1 md:grid-cols-[210px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)_290px] xl:grid-cols-[230px_minmax(0,1fr)_320px] 2xl:grid-cols-[240px_minmax(0,820px)_340px]';
   } else if (hasLeft && !hasRight) {
-    gridCols =
-      'grid-cols-1 md:grid-cols-[250px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[310px_minmax(0,1fr)]';
+    if (isAnalytics) {
+      gridCols =
+        'grid-cols-1 md:grid-cols-[190px_minmax(0,1fr)] xl:grid-cols-[210px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)]';
+      gridGap = 'gap-y-4 gap-x-2 md:gap-x-3';
+    } else {
+      gridCols =
+        'grid-cols-1 md:grid-cols-[250px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[310px_minmax(0,1fr)]';
+    }
   } else if (!hasLeft && hasRight) {
     gridCols =
       'grid-cols-1 lg:grid-cols-[minmax(0,1fr)_290px] xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,820px)_340px]';
@@ -80,7 +90,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
       {/* 3. Universal 3-Column Workspace Grid */}
       <main className={`flex-1 w-full max-w-[1540px] mx-auto px-3 sm:px-6 py-5 sm:py-6 ${className}`}>
-        <div className={`grid ${gridCols} gap-4 lg:gap-5 xl:gap-7 justify-center`}>
+        <div className={`grid ${gridCols} ${gridGap} justify-center`}>
           {/* Column 1: Left Sidebar */}
           {hasLeft && (
             <div className="shrink-0 hidden md:block">
