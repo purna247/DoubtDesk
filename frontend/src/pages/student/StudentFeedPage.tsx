@@ -12,6 +12,7 @@ import { ProfilePage } from '../../components/profile/ProfilePage';
 import { AskDoubtModal, AskDoubtSubmission } from '../../components/modals/AskDoubtModal';
 import { AnswerDoubtModal } from '../../components/modals/AnswerDoubtModal';
 import { ToastNotification } from '../../components/ui/ToastNotification';
+import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
 import { LearnView } from '../../components/academic/LearnView';
 import { QuizView } from '../../components/academic/QuizView';
 import { PYQView } from '../../components/academic/PYQView';
@@ -416,25 +417,22 @@ export const StudentFeedPage: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 sm:p-14 text-center my-6">
-                <div className="w-14 h-14 rounded-full bg-[#F4F7F9] flex items-center justify-center text-[#71808C] mx-auto mb-4 shadow-xs">
-                  <HelpCircle className="w-7 h-7 text-[#71808C]" />
-                </div>
-                <h2 className="text-lg font-bold text-[#111111] mb-5">
-                  {filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()
+              <EmptyStateCard
+                className="my-6"
+                icon={HelpCircle}
+                title={
+                  filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()
                     ? 'No Doubts Found For This Filter'
-                    : 'No Doubts Posted Yet'}
-                </h2>
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#F4F7F9] text-xs font-semibold text-[#4D5963]">
-                  <HelpCircle className="w-4 h-4 text-[#0A8FF5]" />
-                  <span>
-                    {filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()
-                      ? 'Try clearing active filters or adjusting your search'
-                      : 'Be the first to ask a doubt and kick off the discussion'}
-                  </span>
-                </div>
-                {filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim() ? (
-                  <div className="mt-5">
+                    : 'No Doubts Posted Yet'
+                }
+                badgeIcon={HelpCircle}
+                badgeText={
+                  filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim()
+                    ? 'Try clearing active filters or adjusting your search'
+                    : 'Be the first to ask a doubt and kick off the discussion'
+                }
+                action={
+                  filterMode !== 'all' || selectedSubject !== 'all' || searchQuery.trim() ? (
                     <button
                       type="button"
                       onClick={() => {
@@ -446,9 +444,7 @@ export const StudentFeedPage: React.FC = () => {
                     >
                       Reset Filters
                     </button>
-                  </div>
-                ) : (
-                  <div className="mt-5">
+                  ) : (
                     <button
                       type="button"
                       onClick={() => setIsAskModalOpen(true)}
@@ -456,9 +452,9 @@ export const StudentFeedPage: React.FC = () => {
                     >
                       Ask a Question
                     </button>
-                  </div>
-                )}
-              </div>
+                  )
+                }
+              />
             )}
           </>
         )}

@@ -1,5 +1,6 @@
 import React from 'react';
 import { BookMarked, Filter, HelpCircle } from 'lucide-react';
+import { EmptyStateCard } from '../ui/EmptyStateCard';
 import { SUBJECTS_LIST } from '../../data/doubtsData';
 
 interface PYQViewProps {
@@ -21,18 +22,12 @@ export const PYQView: React.FC<PYQViewProps> = ({ selectedSubject = 'all' }) => 
       )}
 
       {/* Empty State: No PYQs Uploaded Yet */}
-      <div className="border border-[#DCE7EE] rounded-[16px] bg-white p-10 sm:p-14 text-center">
-        <div className="w-14 h-14 rounded-full bg-[#F4F7F9] flex items-center justify-center text-[#71808C] mx-auto mb-4 shadow-xs">
-          <BookMarked className="w-7 h-7" />
-        </div>
-        <h2 className="text-lg font-bold text-[#111111] mb-5">
-          No Previous Year Papers Archived Yet
-        </h2>
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#F4F7F9] text-xs font-semibold text-[#4D5963]">
-          <HelpCircle className="w-4 h-4 text-[#0A8FF5]" />
-          <span>Exam archive currently empty for this subject</span>
-        </div>
-      </div>
+      <EmptyStateCard
+        icon={BookMarked}
+        title="No Previous Year Papers Archived Yet"
+        badgeIcon={HelpCircle}
+        badgeText="Exam archive currently empty for this subject"
+      />
     </div>
   );
 };
