@@ -540,8 +540,10 @@ async def _process_academic_document(db:AsyncSession,trigger_doc:SourceDocument,
                         cand_keys={str(c.get("concept_key")) for m in (raw_syl.get("modules",[]) if isinstance(raw_syl,dict) else []) if isinstance(m,dict) for t in (m.get("topics") or []) if isinstance(t,dict) for c in (t.get("concepts") or []) if isinstance(c,dict) and c.get("concept_key")}
                         unresolved_modules,_=await _repair_invalid_items(db,run,chunks_by_id,invalid_modules,[],cand_keys,set(),valid_modules,[])
                         if unresolved_modules:
-                            run.warnings_count+=1;run.has_warnings=True
-                            db.add(AcademicExtractionBatch(run_id=run.id,stage="repair",batch_index=0,status="flagged_for_review",source_chunk_ids=sorted(_extract_invalid_chunk_ids(unresolved_modules,[],chunks_by_id)),response_json={"modules":unresolved_modules,"questions":[]},warning_code="ITEMS_NEED_REVIEW",warning_message="Some syllabus items remained invalid after repair and need teacher review.",attempts=1))
+                            existing_review=await db.scalar(select(AcademicExtractionBatch.id).where(AcademicExtractionBatch.run_id==run.id,AcademicExtractionBatch.stage=="repair",AcademicExtractionBatch.batch_index==0).limit(1))
+                            if not existing_review:
+                                run.warnings_count+=1;run.has_warnings=True
+                                db.add(AcademicExtractionBatch(run_id=run.id,stage="repair",batch_index=0,status="flagged_for_review",source_chunk_ids=sorted(_extract_invalid_chunk_ids(unresolved_modules,[],chunks_by_id)),response_json={"modules":unresolved_modules,"questions":[]},warning_code="ITEMS_NEED_REVIEW",warning_message="Some syllabus items remained invalid after repair and need teacher review.",attempts=1))
                     validated_modules=_dedupe_modules(valid_modules)
                     if not validated_modules:
                         raise ValueError("no_valid_syllabus_modules")
