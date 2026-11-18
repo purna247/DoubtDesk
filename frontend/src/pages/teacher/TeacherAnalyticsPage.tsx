@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, BarChart3, Check, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
+import { AlertCircle, BarChart3, Check, ChevronDown, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { MisconceptionReportPanel } from '../../components/academic/MisconceptionReportPanel';
 import { useCourseMisconceptions } from '../../hooks/useCourseMisconceptions';
@@ -180,24 +180,28 @@ export const TeacherAnalyticsPage: React.FC<{
   return (
     <section className="space-y-6">
       {/* Header filter & controls bar */}
-      <header className="flex items-center justify-end gap-2">
-        <select
-          value={offeringId}
-          onChange={(event) => setOfferingId(event.target.value)}
-          className="rounded-xl border border-[#DCE7EE] bg-white px-3 py-2 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#0A8FF5]"
-        >
-          {offerings.map((item) => (
-            <option key={item.id} value={item.id}>
-              {[item.official_subject_code, item.subject_name, item.section_code].filter(Boolean).join(' · ')}
-            </option>
-          ))}
-        </select>
+      <header className="flex items-center justify-end gap-3">
+        <div className="relative inline-flex items-center">
+          <select
+            value={offeringId}
+            onChange={(event) => setOfferingId(event.target.value)}
+            className="h-10 pl-4 pr-9 rounded-full bg-[#EBF2F7] hover:bg-[#E2ECF2] text-[#111111] text-xs sm:text-[13px] font-bold border-none cursor-pointer focus:outline-none appearance-none transition-colors"
+          >
+            {offerings.map((item) => (
+              <option key={item.id} value={item.id}>
+                {[item.official_subject_code, item.subject_name, item.section_code].filter(Boolean).join(' · ')}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="w-4 h-4 text-[#4D5963] absolute right-3 pointer-events-none" />
+        </div>
         <button
           onClick={() => void runAnalytics()}
           disabled={!offeringId || loading}
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition disabled:opacity-50 cursor-pointer"
+          className="h-9 px-6 rounded-full border border-[#111111] hover:bg-[#111111] hover:text-white text-[#111111] font-extrabold text-xs tracking-wider uppercase transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-2"
         >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Recompute
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Recompute
         </button>
       </header>
 
