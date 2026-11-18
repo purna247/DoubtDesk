@@ -72,7 +72,7 @@ class QuestionOut(BaseModel):
     source_question_id:str
     original_number:str=Field(min_length=1,max_length=50)
     text:str=Field(min_length=5,max_length=5000)
-    marks:float=Field(gt=0,le=1000)
+    marks:float=Field(default=2.0,ge=0,le=1000)
     module:str=Field(default="",max_length=240)
     concept_keys:list[str]
     confidence:float=Field(ge=0,le=1)
@@ -123,8 +123,8 @@ def normalize_text(value:str)->str:
 def evidence_matches(quote:str, source:str)->bool:
     """Normalize formatting, then use a length-guarded fuzzy check for PDF/DOCX wraps."""
     q=normalize_text(quote); s=normalize_text(source)
+    if q and q in s:return True
     if len(q)<30 or len(q.split())<5:return False
-    if q in s:return True
     if fuzz.partial_ratio(q,s)<90:return False
     distinctive={w for w in q.split() if len(w)>=4}
     return len(distinctive)>=4 and len(distinctive & set(s.split()))/len(distinctive)>=0.8
@@ -203,12 +203,23 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
                 estimated_tokens=estimate + output_budget,
                 priority=Priority.LOW,
                 timeout=180.0,
-                max_retries=1,
+                max_retries=2,
             )
             data=response.json()
             parts=data["candidates"][0]["content"]["parts"]
             text_part=next((p["text"] for p in reversed(parts) if isinstance(p,dict) and not p.get("thought") and "text" in p),parts[0]["text"])
-            body=json.loads(text_part)
+            cleaned_text = text_part.strip()
+            if cleaned_text.startswith("```"):
+                cleaned_text = cleaned_text.strip("`").removeprefix("json").strip()
+            try:
+                body = json.loads(cleaned_text)
+            except json.JSONDecodeError:
+                s_idx = cleaned_text.find("{")
+                e_idx = cleaned_text.rfind("}")
+                if s_idx != -1 and e_idx != -1:
+                    body = json.loads(cleaned_text[s_idx : e_idx + 1])
+                else:
+                    raise
             _MODEL_COOLDOWN_UNTIL.pop(model,None)
             usage=data.get("usageMetadata",{})
             return body,int(usage.get("promptTokenCount",estimate)),int(usage.get("candidatesTokenCount",0)),model
@@ -332,7 +343,10 @@ def _group_prompt(module:str,concepts:list[dict],questions:list[dict])->str:
 
 def _validate_question_item(item:dict[str,Any],question_source_ids:set[str],allowed_concept_keys:set[str],chunks_by_id:dict[str,SourceChunk])->dict[str,Any]:
     """Validate and ground one extracted question item against source chunks and concept keys."""
-    q=QuestionOut.model_validate(item)
+    raw_item = dict(item)
+    if raw_item.get("marks") is None or float(raw_item.get("marks", 0)) <= 0:
+        raw_item["marks"] = 2.0
+    q=QuestionOut.model_validate(raw_item)
     source_key,separator,number=q.source_question_id.partition("#")
     source_chunk_id=source_key.removeprefix("q:")
     if not separator or normalize_text(number)!=normalize_text(q.original_number) or source_chunk_id not in question_source_ids or source_chunk_id not in {ev.chunk_id for ev in q.evidence}:
@@ -341,7 +355,10 @@ def _validate_question_item(item:dict[str,Any],question_source_ids:set[str],allo
         raise ValueError("question_source_invalid")
     if not set(q.concept_keys)<=allowed_concept_keys or not q.concept_keys:
         raise ValueError("question_concept_reference_invalid")
-    if fuzz.ratio(normalize_text(q.text),normalize_text(q.evidence[0].quote))<75:
+    combined_quote = " ".join(ev.quote for ev in q.evidence)
+    norm_text = normalize_text(q.text)
+    norm_combined = normalize_text(combined_quote)
+    if fuzz.ratio(norm_text, norm_combined) < 75 and fuzz.partial_ratio(norm_combined, norm_text) < 75:
         raise ValueError("question_text_not_grounded")
     return q.model_dump(mode="json")
 
