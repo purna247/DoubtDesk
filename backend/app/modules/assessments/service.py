@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.common.exceptions import AppException
+from app.common.gemini_client import gemini_gateway, Priority
 from app.modules.assessments.models import (
     Assessment,
     AssessmentVersion,
@@ -1425,73 +1426,20 @@ class AssessmentService:
             "Rules: Every question must have exactly 4 distinct options and correct_index in 0..3."
         )
 
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
-        }
-
-        configured_models = [
-            settings.GEMINI_MODEL,
-            *[model.strip() for model in getattr(settings, "GEMINI_FALLBACK_MODELS", "").split(",") if model.strip()],
-            getattr(settings, "GEMINI_REPAIR_MODEL", settings.GEMINI_MODEL),
-        ]
-        models = list(dict.fromkeys(configured_models))
-        resp = None
-        last_status = None
-        observed_statuses = []
-        last_network_error = False
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            for model in models:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-                try:
-                    candidate = await client.post(url, headers={"x-goog-api-key": settings.GEMINI_API_KEY}, json=payload)
-                except httpx.HTTPError as exc:
-                    last_network_error = True
-                    logger.warning("Quiz Gemini request failed model=%s error=%s", model, type(exc).__name__)
-                    continue
-                if candidate.status_code == 200:
-                    resp = candidate
-                    break
-                last_status = candidate.status_code
-                observed_statuses.append(candidate.status_code)
-                logger.warning("Quiz Gemini request failed model=%s status=%s", model, candidate.status_code)
-                # These statuses may be model-specific or transient; allow the configured fallbacks.
-                if candidate.status_code not in {404, 429, 500, 502, 503, 504}:
-                    break
-
-        if resp is None:
-            if 503 in observed_statuses:
-                last_status = 503
-            elif 429 in observed_statuses:
-                last_status = 429
-            if last_status == 503:
-                message = "Gemini is temporarily unavailable across the configured models. Please retry shortly."
-            elif last_status == 429:
-                message = "Gemini API rate or usage limit was reached for the configured models. Please retry later."
-            elif last_status in {401, 403}:
-                message = "Gemini rejected the API key or model access. Check the backend Gemini API configuration."
-            elif last_status == 404:
-                message = "None of the configured Gemini models is available to this API key. Check model access and names."
-            elif last_network_error:
-                message = "The backend could not reach Gemini using the configured models. Check network access and retry."
-            else:
-                message = "Gemini could not generate quiz questions from the configured models. Please retry."
-            raise AppException(status_code=502, code="AI_GENERATION_FAILED", message=message)
-
-        raw_body = resp.json()
-        candidates = raw_body.get("candidates") or [{}]
-        parts = candidates[0].get("content", {}).get("parts") or [{}]
-        raw_text = (parts[0].get("text") or "").strip()
-        if raw_text.startswith("```"):
-            raw_text = raw_text.strip("`").removeprefix("json").strip()
-
         try:
-            parsed = json.loads(raw_text)
-        except json.JSONDecodeError:
+            parsed = await gemini_gateway.generate_json(
+                prompt=prompt,
+                stage="quiz_generation",
+                priority=Priority.HIGH,
+                temperature=0.4,
+                max_output_tokens=min(settings.GEMINI_MAX_OUTPUT_TOKENS, 4096),
+            )
+        except Exception as exc:
+            logger.warning("Quiz generation via Gemini Gateway failed: %s", exc)
             raise AppException(
                 status_code=502,
-                code="AI_INVALID_JSON",
-                message="AI returned malformed quiz data. Please try generating again.",
+                code="AI_GENERATION_FAILED",
+                message="Gemini could not generate quiz questions under current quota limits. Please retry shortly.",
             )
 
         if isinstance(parsed, list):

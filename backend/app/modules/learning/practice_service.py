@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.common.exceptions import AppException
+from app.common.gemini_client import gemini_gateway, Priority
 from app.config import get_settings
 from app.modules.academics.models import CourseOffering, CurriculumSubjectEntry
 from app.modules.assessments.models import StudentLearningNodeProgress
@@ -580,34 +581,17 @@ async def _generate_practice_questions_ai(
         "}\n"
     )
 
-    models = list(
-        dict.fromkeys(
-            [
-                settings.GEMINI_MODEL,
-                *[m.strip() for m in getattr(settings, "GEMINI_FALLBACK_MODELS", "").split(",") if m.strip()],
-                getattr(settings, "GEMINI_REPAIR_MODEL", settings.GEMINI_MODEL),
-            ]
-        )
-    )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.35},
-    }
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            for model in models:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-                resp = await client.post(url, headers={"x-goog-api-key": settings.GEMINI_API_KEY}, json=payload)
-                if resp.status_code != 200:
-                    continue
-                parts = (resp.json().get("candidates") or [{}])[0].get("content", {}).get("parts") or [{}]
-                raw = (parts[0].get("text") or "").strip()
-                if raw.startswith("```"):
-                    raw = raw.strip("`").removeprefix("json").strip()
-                parsed = json.loads(raw)
-                items = parsed.get("questions") if isinstance(parsed, dict) else parsed
-                if isinstance(items, list) and len(items) >= 3:
-                    return [q for q in items if isinstance(q, dict) and (q.get("question") or q.get("template"))]
+        parsed = await gemini_gateway.generate_json(
+            prompt=prompt,
+            stage="adaptive_practice",
+            priority=Priority.HIGH,
+            temperature=0.35,
+            cache_ttl_hours=48.0,
+        )
+        items = parsed.get("questions") if isinstance(parsed, dict) else parsed
+        if isinstance(items, list) and len(items) >= 3:
+            return [q for q in items if isinstance(q, dict) and (q.get("question") or q.get("template"))]
     except Exception as exc:
         logger.warning("Adaptive practice AI generation failed node=%s error=%s", node.id, exc)
     return None

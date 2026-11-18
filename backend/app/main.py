@@ -32,6 +32,7 @@ from app.modules.rbac.dependencies import (
 )
 from app.modules.auth.schemas import UserProfile
 from fastapi import Depends
+from app.common.gemini_client import gemini_gateway
 
 # Configure structured logging
 logging.basicConfig(
@@ -166,4 +167,11 @@ async def probe_tenant_access(
 async def api_v1_ping() -> dict:
     """API v1 ping test endpoint."""
     return {"message": "DoubtDesk API v1 is operational"}
+
+
+@app.get(f"{settings.API_V1_PREFIX}/system/gemini-telemetry", tags=["System"])
+async def get_gemini_telemetry() -> dict:
+    """Real-time Gemini gateway metrics, quota limits, circuit breaker, and cache hit ratios."""
+    return gemini_gateway.get_telemetry()
+
 

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
+from app.common.gemini_client import gemini_gateway, Priority
 from app.modules.sources.models import SourceChunk, SourceDocument, SourceDocumentCourseOffering, SourceExtraction
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,6 @@ settings = get_settings()
 
 _EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 _BATCH_EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
-
-# In-memory LRU query embedding cache to eliminate redundant Gemini API latency
-_QUERY_CACHE: Dict[str, Tuple[float, List[float]]] = {}
-_MAX_QUERY_CACHE = 1000
-_QUERY_CACHE_TTL = 7200.0  # 2 hours
 
 # In-memory course offering chunk embedding cache
 _OFFERING_CACHE: Dict[uuid.UUID, Tuple[float, List[SourceChunk]]] = {}
@@ -41,94 +37,13 @@ def invalidate_course_rag_cache(course_offering_id: Optional[uuid.UUID] = None) 
 
 
 async def compute_embedding(text: str) -> Optional[List[float]]:
-    """Compute a 3072-dimensional vector embedding for a single text using Gemini."""
-    api_key = settings.GEMINI_API_KEY
-    cleaned = (text or "").strip()
-    if not api_key or len(cleaned) < 2:
-        return None
-
-    cache_key = cleaned.lower()[:300]
-    now = time.time()
-    if cache_key in _QUERY_CACHE:
-        cached_time, cached_vec = _QUERY_CACHE[cache_key]
-        if now - cached_time < _QUERY_CACHE_TTL:
-            return cached_vec
-
-    payload = {
-        "model": "models/gemini-embedding-001",
-        "content": {"parts": [{"text": cleaned[:2000]}]},
-    }
-    url = f"{_EMBED_URL}?key={api_key}"
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                values = resp.json().get("embedding", {}).get("values")
-                if isinstance(values, list) and len(values) > 0:
-                    vec = [float(v) for v in values]
-                    if len(_QUERY_CACHE) >= _MAX_QUERY_CACHE:
-                        oldest_key = min(_QUERY_CACHE.keys(), key=lambda k: _QUERY_CACHE[k][0])
-                        _QUERY_CACHE.pop(oldest_key, None)
-                    _QUERY_CACHE[cache_key] = (now, vec)
-                    return vec
-    except Exception as exc:
-        logger.debug("Failed computing embedding: %s", exc)
-    return None
+    """Compute a 3072-dimensional vector embedding for a single text using centralized gateway with multi-tier cache."""
+    return await gemini_gateway.get_embedding(text, priority=Priority.HIGH)
 
 
 async def compute_batch_embeddings(texts: List[str]) -> List[Optional[List[float]]]:
-    """Compute 3072-dimensional embeddings for a list of texts in batches of 20 with retry."""
-    api_key = settings.GEMINI_API_KEY
-    if not api_key or not texts:
-        return [None] * len(texts)
-
-    results: List[Optional[List[float]]] = [None] * len(texts)
-    chunk_size = 20
-
-    for i in range(0, len(texts), chunk_size):
-        sub_texts = texts[i : i + chunk_size]
-        valid_indices = []
-        valid_requests = []
-        for idx, t in enumerate(sub_texts):
-            clean_t = (t or "").strip()[:2000]
-            if clean_t:
-                valid_indices.append(idx)
-                valid_requests.append({
-                    "model": "models/gemini-embedding-001",
-                    "content": {"parts": [{"text": clean_t}]},
-                })
-
-        if not valid_requests:
-            continue
-
-        url = f"{_BATCH_EMBED_URL}?key={api_key}"
-
-        try:
-            for attempt in range(5):
-                async with httpx.AsyncClient(timeout=45.0) as client:
-                    resp = await client.post(url, json={"requests": valid_requests})
-                    if resp.status_code == 200:
-                        embeddings_data = resp.json().get("embeddings", [])
-                        for sub_idx, emb_obj in zip(valid_indices, embeddings_data):
-                            vals = emb_obj.get("values")
-                            if isinstance(vals, list) and len(vals) > 0:
-                                results[i + sub_idx] = [float(v) for v in vals]
-                        break
-                    elif resp.status_code == 429:
-                        wait_sec = 8.0 * (attempt + 1)
-                        logger.warning("Gemini embedding rate limited (429). Backing off for %.1fs...", wait_sec)
-                        await asyncio.sleep(wait_sec)
-                    else:
-                        logger.debug("Batch embedding non-200 status: %d", resp.status_code)
-                        break
-        except Exception as exc:
-            logger.debug("Batch embedding request failed: %s", exc)
-            for sub_idx in valid_indices:
-                results[i + sub_idx] = await compute_embedding(sub_texts[sub_idx])
-        await asyncio.sleep(1.5)
-
-    return results
+    """Compute embeddings for a list of texts through centralized rate-limiting queue and persistent cache."""
+    return await gemini_gateway.get_batch_embeddings(texts, priority=Priority.LOW)
 
 
 def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:

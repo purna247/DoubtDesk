@@ -18,6 +18,7 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from PIL import Image
 
 from app.config import get_settings
+from app.common.gemini_client import gemini_gateway, Priority
 
 logger = logging.getLogger(__name__)
 
@@ -670,22 +671,15 @@ class DocumentExtractionEngine:
                                 metadata_json={"format": img.ext, "filename": getattr(img, "filename", None)},
                             )
                         )
-                        if image_b64 is None and len(img_bytes) > 25000:
-                            try:
-                                pil_img = Image.open(io.BytesIO(img_bytes))
-                                pil_img.thumbnail((800, 800))
-                                buf = io.BytesIO()
-                                pil_img.save(buf, format="JPEG", quality=85)
-                                image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                            except Exception:
-                                pass
+                        if image_raw_bytes is None and len(img_bytes) > 25000:
+                            image_raw_bytes = img_bytes
                     except Exception:
                         pass
 
             # 3. Check if vision-based diagram extraction is needed
             total_editable_len = sum(len(p) for p in body_parts)
-            if total_editable_len < 60 and settings.GEMINI_API_KEY and image_b64:
-                visual_ocr_tasks.append((slide_idx, slide_num, slide_title, image_b64))
+            if total_editable_len < 60 and settings.GEMINI_API_KEY and image_raw_bytes:
+                visual_ocr_tasks.append((slide_idx, slide_num, slide_title, image_raw_bytes))
 
             # 4. Extract Speaker Notes if present
             notes_text = ""
@@ -706,40 +700,23 @@ class DocumentExtractionEngine:
                 "notes_text": notes_text,
             })
 
-        # Concurrent Gemini Vision OCR for diagram slides
+        # Controlled Gemini Vision OCR for diagram slides (governed by GeminiGateway)
         visual_results: Dict[int, str] = {}
         if visual_ocr_tasks:
-            workers_count = min(4, len(visual_ocr_tasks))
+            workers_count = min(2, len(visual_ocr_tasks))
             logger.info(
-                "[Vision OCR] Parallelizing %d diagram slide extractions across %d workers via Gemini 3.5 Flash Lite...",
+                "[Vision OCR] Rate-limited extraction for %d diagram slides (concurrency=%d, RPM cap=14)...",
                 len(visual_ocr_tasks),
                 workers_count,
             )
 
             def _ocr_worker(task_item):
-                s_idx, s_num, s_title, b64_str = task_item
-                t_ocr = time.time()
+                s_idx, s_num, s_title, raw_bytes = task_item
                 try:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={settings.GEMINI_API_KEY}"
-                    payload = {
-                        "contents": [{
-                            "parts": [
-                                {"text": "Extract all readable text, titles, headings, and diagram architecture descriptions from this academic lecture slide. Be thorough and concise."},
-                                {"inline_data": {"mime_type": "image/jpeg", "data": b64_str}}
-                            ]
-                        }]
-                    }
-                    with httpx.Client(timeout=16.0) as client:
-                        resp = client.post(url, json=payload)
-                        if resp.status_code == 200:
-                            cand = resp.json().get("candidates", [])
-                            if cand:
-                                p_text = cand[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-                                logger.info(
-                                    "[Vision OCR] Slide %d/%d ('%s') diagram text extracted in %.1fs (%d chars)",
-                                    s_num, total_slides, s_title, time.time() - t_ocr, len(p_text)
-                                )
-                                return s_idx, p_text
+                    p_text = gemini_gateway.extract_visual_diagram_text_sync(raw_bytes, priority=Priority.LOW)
+                    if p_text:
+                        logger.info("[Vision OCR] Slide %d/%d ('%s') diagram text ready (%d chars)", s_num, total_slides, s_title, len(p_text))
+                        return s_idx, p_text
                 except Exception as exc:
                     logger.warning("[Vision OCR] Slide %d diagram OCR failed: %s", s_num, exc)
                 return s_idx, ""

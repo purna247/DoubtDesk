@@ -26,6 +26,7 @@ from app.modules.learning.models import LearningNode, LearningNodeConcept, Learn
 from app.modules.questions.models import Question, QuestionVersion, QuestionPart, QuestionPartConceptAllocation, QuestionVersionSource, QuestionCoverageEvent
 from app.modules.sources.academic_models import AcademicExtractionRun, AcademicExtractionBatch, GeminiQuotaWindow
 from app.modules.sources.models import SourceChunk, SourceDocument, SourceDocumentCourseOffering, SourceExtraction
+from app.common.gemini_client import gemini_gateway, Priority
 
 logger=logging.getLogger(__name__)
 PROMPT_VERSION="course-graph-v3"
@@ -188,16 +189,22 @@ async def _gemini_json(db:AsyncSession,prompt:str,stage:str,repair:bool=False)->
         url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         payload={"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.1,"maxOutputTokens":output_budget,"responseMimeType":"application/json","responseSchema":_json_schema(stage)}}
         try:
-            async with httpx.AsyncClient(timeout=180) as client:
-                response=await client.post(url,headers={"x-goog-api-key":settings.GEMINI_API_KEY},json=payload)
-                response.raise_for_status();data=response.json()
+            response = await gemini_gateway._execute_with_backoff(
+                limiter=gemini_gateway.flash_limiter,
+                url=url,
+                payload=payload,
+                estimated_tokens=estimate + output_budget,
+                priority=Priority.LOW,
+                timeout=180.0,
+            )
+            data=response.json()
             parts=data["candidates"][0]["content"]["parts"]
             text_part=next((p["text"] for p in reversed(parts) if isinstance(p,dict) and not p.get("thought") and "text" in p),parts[0]["text"])
             body=json.loads(text_part)
             _MODEL_COOLDOWN_UNTIL.pop(model,None)
             usage=data.get("usageMetadata",{})
             return body,int(usage.get("promptTokenCount",estimate)),int(usage.get("candidatesTokenCount",0)),model
-        except (httpx.HTTPError,KeyError,IndexError,ValueError,json.JSONDecodeError) as exc:
+        except (httpx.HTTPError,KeyError,IndexError,ValueError,json.JSONDecodeError,RuntimeError) as exc:
             last_error=exc
             if isinstance(exc,httpx.HTTPStatusError):
                 status=exc.response.status_code

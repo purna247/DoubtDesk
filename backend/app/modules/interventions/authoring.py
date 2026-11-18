@@ -56,38 +56,30 @@ async def reviewed_chunks(db: AsyncSession, tenant_id: UUID, offering_id: UUID, 
     return (await db.execute(stmt)).all()
 
 
+from app.common.gemini_client import gemini_gateway, Priority
+
+
 async def request_ai_json(prompt: str) -> dict:
     settings = get_settings()
     if not settings.GEMINI_API_KEY:
-        raise AppException(status_code=503, code="AI_NOT_CONFIGURED", message="AI generation is not configured. You can author questions below or use existing assessments.")
-    models = list(dict.fromkeys([
-        settings.GEMINI_MODEL,
-        *[name.strip() for name in settings.GEMINI_FALLBACK_MODELS.split(",") if name.strip()],
-    ]))
-    async with httpx.AsyncClient(timeout=90) as client:
-        for model in models:
-            try:
-                response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                    headers={"x-goog-api-key": settings.GEMINI_API_KEY},
-                    json={"contents": [{"parts": [{"text": prompt}]}],
-                          "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3}},
-                )
-            except httpx.HTTPError:
-                continue
-            if response.status_code != 200:
-                if response.status_code in {404, 429, 500, 502, 503, 504}:
-                    continue
-                break
-            try:
-                parts = response.json()["candidates"][0]["content"]["parts"]
-                raw = "".join(part.get("text", "") for part in parts if not part.get("thought"))
-                parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-                if isinstance(parsed, dict):
-                    return parsed
-            except (KeyError, IndexError, TypeError, ValueError):
-                pass
-    raise AppException(status_code=502, code="AI_GENERATION_FAILED", message="AI could not return a valid draft. Retry, or author the questions below.")
+        raise AppException(
+            status_code=503,
+            code="AI_NOT_CONFIGURED",
+            message="AI generation is not configured. You can author questions below or use existing assessments.",
+        )
+    try:
+        parsed = await gemini_gateway.generate_json(
+            prompt=prompt,
+            stage="intervention_draft",
+            priority=Priority.HIGH,
+            temperature=0.3,
+            cache_ttl_hours=24.0,
+        )
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception as exc:
+        pass
+    raise AppException(status_code=502, code="AI_GENERATION_FAILED", message="AI could not return a valid draft under current rate limits. Retry, or author the questions below.")
 
 
 async def generate_draft(db: AsyncSession, tenant_id: UUID, offering_id: UUID, req: GenerateInterventionRequest) -> InterventionDraft:

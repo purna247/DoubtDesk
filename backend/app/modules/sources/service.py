@@ -306,21 +306,44 @@ class SourceService:
             persisted_chunks.append(source_chunk)
         await db.flush()
 
-        # Compute semantic embeddings for document chunks if Gemini API key is configured
+        # Compute semantic embeddings for document chunks with database and cache deduplication
         if persisted_chunks:
-            await JobService.update_progress(
-                db, job_id, "generating_embeddings", 78.0,
-                f"Generating Gemini semantic vector embeddings for {len(persisted_chunks)} chunks."
-            )
-            try:
-                texts_to_embed = [c.content_text for c in persisted_chunks]
-                embeddings = await compute_batch_embeddings(texts_to_embed)
-                for sc, emb in zip(persisted_chunks, embeddings):
-                    if emb:
-                        sc.embedding_json = emb
-                await db.flush()
-            except Exception as emb_exc:
-                logger.debug("Failed computing chunk embeddings: %s", emb_exc)
+            # 1. Check existing embeddings across database by content_hash to avoid redundant API calls
+            hashes = [c.content_hash for c in persisted_chunks if c.content_hash]
+            existing_embeddings: dict[str, list] = {}
+            if hashes:
+                existing_res = await db.execute(
+                    select(SourceChunk.content_hash, SourceChunk.embedding_json)
+                    .where(SourceChunk.content_hash.in_(hashes), SourceChunk.embedding_json.isnot(None))
+                )
+                for row in existing_res.all():
+                    if row[0] and row[1]:
+                        existing_embeddings[row[0]] = row[1]
+
+            chunks_needing_embed = []
+            for sc in persisted_chunks:
+                if sc.content_hash in existing_embeddings:
+                    sc.embedding_json = existing_embeddings[sc.content_hash]
+                elif not sc.embedding_json:
+                    chunks_needing_embed.append(sc)
+
+            if chunks_needing_embed:
+                reused_count = len(persisted_chunks) - len(chunks_needing_embed)
+                await JobService.update_progress(
+                    db, job_id, "generating_embeddings", 78.0,
+                    f"Generating Gemini semantic vector embeddings for {len(chunks_needing_embed)} chunks ({reused_count} reused from DB/cache)."
+                )
+                try:
+                    texts_to_embed = [c.content_text for c in chunks_needing_embed]
+                    embeddings = await compute_batch_embeddings(texts_to_embed)
+                    for sc, emb in zip(chunks_needing_embed, embeddings):
+                        if emb:
+                            sc.embedding_json = emb
+                    await db.flush()
+                except Exception as emb_exc:
+                    logger.debug("Failed computing chunk embeddings: %s", emb_exc)
+            else:
+                logger.info("[SourceService] 100%% of chunk embeddings (%d) reused from database! 0 API calls.", len(persisted_chunks))
 
         # Persist assets
         await JobService.update_progress(
