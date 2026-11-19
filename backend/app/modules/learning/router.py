@@ -109,7 +109,12 @@ async def list_course_learning_nodes_teacher(
         .where(LearningNode.course_offering_id == offering_id, LearningNode.institution_id == tenant_id)
         .order_by(LearningNode.sequence_no, LearningNode.created_at)
     )
-    nodes = (await db.execute(stmt)).scalars().unique().all()
+    raw_nodes = (await db.execute(stmt)).scalars().unique().all()
+    nodes = [
+        node for node in raw_nodes
+        if node.title != "Course Quizzes & Assessments"
+        and (node.node_code or "") not in ["QUIZZES", "QUIZ_CONTAINER"]
+    ]
     return [LearningNodeOut(
         id=node.id, institution_id=node.institution_id, course_offering_id=node.course_offering_id,
         course_content_version_id=node.course_content_version_id, node_code=node.node_code,

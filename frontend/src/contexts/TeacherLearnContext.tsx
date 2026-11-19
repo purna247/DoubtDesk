@@ -105,16 +105,25 @@ export const TeacherLearnProvider: React.FC<TeacherLearnProviderProps> = ({
 
   const academicExtraction = useStartAcademicExtraction();
   const workspaceQuery = useTeacherLearningWorkspace(offeringId);
-  const nodes = workspaceQuery.data?.nodes ?? [];
+  const rawNodes = workspaceQuery.data?.nodes ?? [];
+  const nodes = useMemo(
+    () =>
+      rawNodes.filter(
+        (node) =>
+          node.title !== 'Course Quizzes & Assessments' &&
+          (node.node_code || '') !== 'QUIZZES' &&
+          (node.node_code || '') !== 'QUIZ_CONTAINER'
+      ),
+    [rawNodes]
+  );
   const summary = workspaceQuery.data?.summary ?? EMPTY_SUMMARY;
   const loading = workspaceQuery.isLoading;
   const isError = workspaceQuery.isError;
 
   // Auto-select first node if current selection is invalid
   useEffect(() => {
-    const rows = workspaceQuery.data?.nodes ?? [];
-    setSelectedId((current) => (rows.some((node) => node.id === current) ? current : rows[0]?.id ?? ''));
-  }, [workspaceQuery.data?.nodes]);
+    setSelectedId((current) => (nodes.some((node) => node.id === current) ? current : nodes[0]?.id ?? ''));
+  }, [nodes]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId),
