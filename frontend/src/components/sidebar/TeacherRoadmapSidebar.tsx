@@ -67,7 +67,7 @@ export const TeacherRoadmapSidebar: React.FC = () => {
                 {moduleTitle}
               </p>
               <div className="space-y-1">
-                {moduleNodes.map((node) => {
+                {moduleNodes.map((node, index) => {
                   const isSelected = selectedId === node.id;
                   const isPublished = node.status === 'published';
                   return (
@@ -82,7 +82,7 @@ export const TeacherRoadmapSidebar: React.FC = () => {
                       }`}
                     >
                       <span className="text-[11px] font-mono text-[#71808C] mt-0.5">
-                        {node.sequence_no}.
+                        {index + 1}.
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="text-xs leading-snug line-clamp-2">{node.title}</p>

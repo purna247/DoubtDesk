@@ -59,6 +59,7 @@ export const TeacherLearnWorkspace: React.FC<{
     selectNode,
     loading,
     publishCurrentNode,
+    deleteCurrentNode,
     publishAll,
     startExtraction,
     generateAllCoursePractice: contextGenerateAllCoursePractice,
@@ -533,11 +534,16 @@ export const TeacherLearnWorkspace: React.FC<{
             onChange={(e) => selectNode(e.target.value)}
             className="w-full text-xs font-semibold rounded-lg border border-[#DCE7EE] bg-white px-2.5 py-2 text-[#111111]"
           >
-            {nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.sequence_no}. {n.title} {n.status !== 'published' ? '(Draft)' : ''}
-              </option>
-            ))}
+            {nodes.map((n) => {
+              const modNodes = nodes.filter((x) => (x.module_title || '') === (n.module_title || ''));
+              const modIdx = modNodes.findIndex((x) => x.id === n.id) + 1;
+              const modPrefix = n.module_title ? `${n.module_title.split(':')[0]} · ` : '';
+              return (
+                <option key={n.id} value={n.id}>
+                  {modPrefix}{modIdx > 0 ? `${modIdx}. ` : ''}{n.title} {n.status !== 'published' ? '(Draft)' : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
       )}
@@ -661,6 +667,21 @@ export const TeacherLearnWorkspace: React.FC<{
                     <Send className="h-3.5 w-3.5" /> Publish Topic
                   </Button>
                 )}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to delete the topic "${selectedNode.title}"?`)) {
+                      void deleteCurrentNode();
+                    }
+                  }}
+                  disabled={busy}
+                  className="text-xs h-8 inline-flex items-center gap-1.5 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                  title="Delete topic"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete Topic
+                </Button>
 
                 <button
                   type="button"
@@ -1440,6 +1461,20 @@ export const TeacherLearnWorkspace: React.FC<{
                       </label>
 
                       <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            if (window.confirm(`Are you sure you want to delete the topic "${selectedNode.title}"?`)) {
+                              void deleteCurrentNode();
+                            }
+                          }}
+                          disabled={busy}
+                          className="text-xs h-7.5 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 mr-1" />
+                          Delete Topic
+                        </Button>
                         {selectedNode.status === 'draft' ? (
                           <>
                             <Button

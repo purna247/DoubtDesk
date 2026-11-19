@@ -157,6 +157,26 @@ async def update_learning_node(
     )
 
 
+@router.delete("/learning-nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_learning_node(
+    node_id: uuid.UUID,
+    user: UserProfile = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a learning node and cascade associated relationships."""
+    tenant_id = _get_tenant_id(user)
+    current = await db.get(LearningNode, node_id)
+    if not current or current.institution_id != tenant_id:
+        raise AppException(status_code=404, code="NODE_NOT_FOUND", message="Learning node not found.")
+    await KnowledgeService.verify_teacher_access(
+        db=db, offering_id=current.course_offering_id, tenant_id=tenant_id,
+        user_id=uuid.UUID(user.id), is_admin=user.role in ["ADMIN", "SUPER_ADMIN"],
+    )
+    await db.delete(current)
+    await db.commit()
+    return None
+
+
 @router.post("/learning-nodes/{node_id}/prerequisites", response_model=LearningNodePrerequisiteOut, status_code=status.HTTP_201_CREATED)
 async def add_prerequisite(
     node_id: uuid.UUID,

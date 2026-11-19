@@ -43,6 +43,7 @@ export interface TeacherLearnContextValue {
   busy: boolean;
   setBusy: (busy: boolean) => void;
   publishCurrentNode: () => Promise<void>;
+  deleteCurrentNode: () => Promise<void>;
   publishAll: () => Promise<void>;
   startExtraction: () => Promise<void>;
   generateAllCoursePractice: () => Promise<void>;
@@ -152,6 +153,20 @@ export const TeacherLearnProvider: React.FC<TeacherLearnProviderProps> = ({
     }
   };
 
+  const deleteCurrentNode = async () => {
+    if (!selectedNode || busy) return;
+    setBusy(true);
+    try {
+      await apiClient.delete(`/api/v1/learning-nodes/${selectedNode.id}`);
+      await workspaceQuery.refetch();
+      setMessage(`Topic "${selectedNode.title}" was deleted.`);
+    } catch (err: unknown) {
+      setMessage(err instanceof Error ? err.message : 'Could not delete topic.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const publishAll = async () => {
     if (
       busy ||
@@ -238,6 +253,7 @@ export const TeacherLearnProvider: React.FC<TeacherLearnProviderProps> = ({
     busy,
     setBusy,
     publishCurrentNode,
+    deleteCurrentNode,
     publishAll,
     startExtraction,
     generateAllCoursePractice,
